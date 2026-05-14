@@ -13,7 +13,11 @@ dotenv.config();
 
 // --- Existing constants ---
 const INDEXER_RPC = "https://indexer-storage-turbo.0g.ai";
-const RPC_URL = process.env.RPC_ENDPOINT || "https://evmrpc.0g.ai/";
+const RPC_ENDPOINTS = [
+  "https://evmrpc-testnet.0g.ai",
+  "https://rpc-testnet.0g.ai",
+  "https://og-testnet-evm.itrocket.net"
+];
 const DIALOGUE_MAP_FILE = path.join(os.tmpdir(), '0g-dialogue-map.json');
 
 // +++ NEW: Add DA constants
@@ -25,10 +29,9 @@ export class StorageManager {
     constructor() {
         // --- Existing initializations ---
         this.indexer = new Indexer(INDEXER_RPC);
-        const provider = new ethers.JsonRpcProvider(RPC_URL);
-        this.signer = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
-        this.provider = provider;
-        this.evmRpc = RPC_URL;
+        this.currentRpcIndex = 0;
+        this.provider = this._getNextProvider();
+        this.signer = new ethers.Wallet(process.env.PRIVATE_KEY, this.provider);
         this.dialogueMap = new Map();
 
         // +++ NEW: Initialize DA Client
@@ -38,6 +41,21 @@ export class StorageManager {
         console.log("✅ 0G Storage & DA Manager initialized successfully.");
     }
     
+    _getNextProvider() {
+        const url = RPC_ENDPOINTS[this.currentRpcIndex];
+        console.log(`📡 Switching to RPC: ${url}`);
+        this.evmRpc = url;
+        this.currentRpcIndex = (this.currentRpcIndex + 1) % RPC_ENDPOINTS.length;
+        return new ethers.JsonRpcProvider(url);
+    }
+
+    async _handleRpcError(error) {
+        console.error(`❌ RPC Error: ${error.message}`);
+        this.provider = this._getNextProvider();
+        this.signer = new ethers.Wallet(process.env.PRIVATE_KEY, this.provider);
+        return true;
+    }
+
     // +++ NEW: Add a method to initialize the gRPC client for DA
     _initializeDaClient() {
         try {
@@ -229,6 +247,9 @@ export class StorageManager {
       console.log(`🗃️ Saved dialogue for ${walletAddress}`);
       console.log(`   Root Hash: ${result.rootHash}`);
 
+      // +++ NEW: Commit to Blockchain for A1 Quality Persistence
+      await this.updateDialogueOnChain(result.rootHash);
+
       // 2. (Optional) Make a critical part of the dialogue available on 0g DA
             if (dialogueObj.isCriticalEvent) {
                 await this.makeDataAvailable(
@@ -297,6 +318,69 @@ export class StorageManager {
         console.error(`❌ All retry attempts failed for ${walletAddress}. Returning empty history.`);
         return { dialogue_history: [] };
       }
+    }
+  }
+
+  async updateDialogueOnChain(rootHash) {
+    try {
+      const contractAddress = "0x6b542A9361A7dd16c0b6396202A192326154a1e2";
+      const abi = [
+        "function updateDialogueRoot(string memory _rootHash) external"
+      ];
+      const contract = new ethers.Contract(contractAddress, abi, this.signer);
+      
+      console.log(`🔗 Sending transaction to update dialogue root on-chain...`);
+      const tx = await contract.updateDialogueRoot(rootHash);
+      console.log(`📡 Tx sent: ${tx.hash}. Waiting for confirmation...`);
+      await tx.wait();
+      console.log(`✅ Dialogue root hash persisted on-chain!`);
+      return true;
+    } catch (error) {
+      console.error("❌ Failed to update dialogue root on-chain:", error.message);
+      return false;
+    }
+  async saveGameState(walletAddress, gameState) {
+    try {
+      console.log(`💾 Persisting game state for ${walletAddress} to 0G Storage...`);
+      const data = typeof gameState === "string" ? gameState : JSON.stringify(gameState);
+      
+      const result = await this._uploadAsFile(data);
+      
+      // Map wallet to game state root
+      this.dialogueMap.set(`${walletAddress}_state`, result.rootHash);
+      await this._saveDialogueMap();
+      
+      console.log(`✅ Game state persisted. Root: ${result.rootHash}`);
+      return result.rootHash;
+    } catch (err) {
+      console.error("❌ Error saving game state:", err);
+      return null;
+    }
+  }
+
+  async getGameState(walletAddress) {
+    try {
+      const rootHash = this.dialogueMap.get(`${walletAddress}_state`);
+      if (!rootHash) return null;
+      
+      console.log(`📥 Resuming game state for ${walletAddress} (Root: ${rootHash})`);
+      
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), '0g-state-download-'));
+      const tempFile = path.join(tempDir, 'state.json');
+      
+      const err = await this.indexer.download(rootHash, tempFile, true);
+      if (err) throw new Error(`Download failed: ${err}`);
+      
+      const content = await fs.readFile(tempFile, 'utf8');
+      const data = JSON.parse(content);
+      
+      await fs.unlink(tempFile);
+      await fs.rmdir(tempDir);
+      
+      return data;
+    } catch (error) {
+      console.error(`❌ Error retrieving game state for ${walletAddress}:`, error.message);
+      return null;
     }
   }
 }

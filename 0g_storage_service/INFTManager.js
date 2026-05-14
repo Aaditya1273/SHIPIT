@@ -7,39 +7,9 @@ export class INFTManager extends StorageManager {
     constructor() {
         super();
         this.initLibsodium();
-        this.initINFTContract(); // Add this line to initialize the contract
+        this.initINFTContract();
 
-        // --- CONFIGURATION VALIDATION ---
-        // Ensure all required environment variables are set to avoid using dummy data.
-        const requiredEnvVars = [
-            'PINATA_API_KEY',
-            'PINATA_SECRET_KEY',
-            'NEWBORN_IMAGE_CID',
-            'CURIOUS_IMAGE_CID',
-            'MASTER_IMAGE_CID',
-            'WISE_IMAGE_CID',
-            'SAVIOR_IMAGE_CID',
-            'ITEM_LANTERN_CID',
-            'ITEM_AXE_CID',
-            'ITEM_FISHING_ROD_CID',
-            'ITEM_SHOVEL_CID',
-            'ITEM_PICKAXE_CID',
-            'ITEM_HAMMER_CID',
-            'ITEM_BUCKET_CID',
-            'ITEM_SCYTHE_CID'
-        ];
-
-        const missingVars = requiredEnvVars.filter(v => !process.env[v]);
-
-        if (missingVars.length > 0) {
-            throw new Error(
-                `FATAL: Missing required environment variables in .env file: ${missingVars.join(', ')}. Please check your .env.example and fill them in.`
-            );
-        }
-
-        this.ipfsGateway = process.env.IPFS_GATEWAY || "https://gateway.pinata.cloud/ipfs/";
-
-        // Stage images - No more dummy data
+        // 0G Storage focused images
         this.stageImages = {
             newborn: process.env.NEWBORN_IMAGE_CID,
             curious: process.env.CURIOUS_IMAGE_CID,
@@ -48,7 +18,6 @@ export class INFTManager extends StorageManager {
             savior: process.env.SAVIOR_IMAGE_CID
         };
 
-        // Item images - No more dummy data
         this.itemImages = {
             lantern: process.env.ITEM_LANTERN_CID,
             axe: process.env.ITEM_AXE_CID,
@@ -60,11 +29,6 @@ export class INFTManager extends StorageManager {
             scythe: process.env.ITEM_SCYTHE_CID
         };
 
-        // IPFS credentials
-        this.pinataApiKey = process.env.PINATA_API_KEY;
-        this.pinataSecretKey = process.env.PINATA_SECRET_KEY;
-
-        // Store metadata versions for versioning
         this.metadataVersions = new Map();
     }
 
@@ -159,28 +123,33 @@ export class INFTManager extends StorageManager {
         }
     }
 
+    // ============== 0G STORAGE OPERATIONS ==============
     /**
-     * Build canonical IPFS URL
+     * Uploads metadata to 0G Storage instead of IPFS.
      */
-    buildIpfsUrl(input) {
-        if (!input) return null;
-        if (/^https?:\/\//i.test(input)) return input;
-        let cid = input;
-        if (cid.startsWith("ipfs://")) cid = cid.replace(/^ipfs:\/+/, "");
-        cid = cid.replace(/^\/?ipfs\/+/, "");
-        const gateway = (this.ipfsGateway || "").replace(/\/+$/, "");
-        const hasIpfs = gateway.toLowerCase().includes("/ipfs");
-        return `${gateway}${hasIpfs ? "" : "/ipfs"}/${cid}`;
+    async uploadTo0G(metadata) {
+        try {
+            console.log("📦 Uploading INFT Metadata to 0G Storage...");
+            const result = await this._uploadAsFile(metadata);
+            return result.rootHash;
+        } catch (error) {
+            console.error("❌ Failed to upload to 0G Storage:", error);
+            throw error;
+        }
+    }
+
+    /**
+     * Build canonical 0G Storage URL (or just return the root hash)
+     */
+    build0gUrl(rootHash) {
+        if (!rootHash) return null;
+        return `0g://${rootHash}`; // Custom protocol for 0G Storage
     }
 
     // ============== INFT LIFECYCLE ==============
 
     /**
      * Create a new game INFT
-     * @param playerAddress - Game player address
-     * @param gameMode - "single_player" or "multiplayer"
-     * @param difficulty - "easy", "medium", "hard"
-     * @param ownerPublicKey - Player's public key for encryption (base64)
      */
     async createGameINFT(playerAddress, gameMode, difficulty, ownerPublicKey) {
         try {
@@ -189,19 +158,17 @@ export class INFTManager extends StorageManager {
             // 1. Generate initial metadata
             const metadata = this.generateInitialMetadata(gameMode, difficulty);
 
-            // 2. Upload to IPFS
-            const ipfsHash = await this.uploadToIPFS(metadata);
-            console.log(`✅ Metadata uploaded to IPFS: ${ipfsHash}`);
+            // 2. Upload to 0G Storage
+            const rootHash = await this.uploadTo0G(metadata);
+            console.log(`✅ Metadata uploaded to 0G: ${rootHash}`);
 
             // 3. Encrypt metadata for owner
             const encryptedMetadata = this.encryptMetadataForOwner(metadata, ownerPublicKey);
-            console.log(`✅ Metadata encrypted for owner`);
 
             // 4. Compute metadata hash
             const metadataHash = ethers.keccak256(
                 ethers.toUtf8Bytes(JSON.stringify(metadata))
             );
-            console.log(`✅ Metadata hash: ${metadataHash}`);
 
             // 5. Create sealed key for owner
             const sealedKey = Buffer.from(`sealed_key_${playerAddress}_${Date.now()}`);
@@ -211,7 +178,7 @@ export class INFTManager extends StorageManager {
                 playerAddress,
                 gameMode,
                 difficulty,
-                encryptedMetadata, // Pass encrypted metadata as URI
+                rootHash, // Use Root Hash instead of IPFS Hash
                 metadataHash,
                 sealedKey
             );
@@ -219,21 +186,9 @@ export class INFTManager extends StorageManager {
             const receipt = await tx.wait();
             const tokenId = this.extractTokenIdFromReceipt(receipt);
 
-            console.log(`✅ INFT #${tokenId} born for ${playerAddress}`);
-
-            // Store metadata version locally for tracking
-            this.metadataVersions.set(tokenId, {
-                version: 1,
-                metadata,
-                ipfsHash,
-                metadataHash,
-                timestamp: Date.now(),
-                encryptedData: encryptedMetadata
-            });
-
             return {
                 tokenId,
-                ipfsHash,
+                rootHash,
                 metadataHash,
                 metadata,
                 encryptedMetadata
@@ -261,9 +216,9 @@ export class INFTManager extends StorageManager {
                 newStage
             );
 
-            // 3. Upload new metadata to IPFS
-            const newIpfsHash = await this.uploadToIPFS(evolvedMetadata);
-            console.log(`✅ New metadata uploaded to IPFS: ${newIpfsHash}`);
+            // 3. Upload new metadata to 0G Storage
+            const newRootHash = await this.uploadTo0G(evolvedMetadata);
+            console.log(`✅ New metadata uploaded to 0G: ${newRootHash}`);
 
             // 4. Encrypt new metadata for owner
             const newEncryptedMetadata = this.encryptMetadataForOwner(
@@ -307,7 +262,7 @@ export class INFTManager extends StorageManager {
             return {
                 tokenId,
                 newStage,
-                newIpfsHash,
+                newRootHash,
                 newMetadataHash,
                 evolvedMetadata,
                 encryptedMetadata: newEncryptedMetadata
@@ -416,8 +371,8 @@ export class INFTManager extends StorageManager {
             name: `Village Mystery Guide #${timestamp.toString().slice(-4)}`,
             description:
                 "An AI companion born from your first steps into the mysterious village. This entity will grow and evolve based on your choices, discoveries, and achievements.",
-            image: this.buildIpfsUrl(this.stageImages.newborn),
-            external_url: "https://towns-whisper.game",
+            image: this.build0gUrl(this.stageImages.newborn),
+            external_url: "https://beyond-the-fog.game",
             attributes: [
                 { trait_type: "Stage", value: "Newborn Guide" },
                 { trait_type: "Game Mode", value: gameMode },
@@ -461,8 +416,8 @@ export class INFTManager extends StorageManager {
         return {
             name: `Village Mystery Guide #${gameData.tokenId || "Unknown"}`,
             description: this.generateStageDescription(stage, gameData),
-            image: this.buildIpfsUrl(this.stageImages[stage]),
-            external_url: "https://towns-whisper.game",
+            image: this.build0gUrl(this.stageImages[stage]),
+            external_url: "https://beyond-the-fog.game",
             attributes: [
                 { trait_type: "Stage", value: stageNames[stage] },
                 { trait_type: "Game Mode", value: gameData.gameMode || "single_player" },
@@ -557,35 +512,7 @@ export class INFTManager extends StorageManager {
     }
 
     // ============== IPFS OPERATIONS ==============
-
-    async uploadToIPFS(metadata) {
-        try {
-            const response = await fetch("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    pinata_api_key: this.pinataApiKey,
-                    pinata_secret_api_key: this.pinataSecretKey
-                },
-                body: JSON.stringify({
-                    pinataContent: metadata,
-                    pinataMetadata: {
-                        name: `${metadata.name} - Metadata`
-                    }
-                })
-            });
-
-            if (!response.ok) {
-                throw new Error(`Pinata error: ${response.statusText}`);
-            }
-
-            const result = await response.json();
-            return result.IpfsHash;
-        } catch (error) {
-            console.error("Failed to upload to IPFS:", error);
-            throw error;
-        }
-    }
+    // IPFS operations removed for 0G Purity
 
     // ============== PROOF GENERATION ==============
 
