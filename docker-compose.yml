@@ -1,0 +1,65 @@
+version: "3.9"
+
+# ── Beyond-The-Fog — Full Stack (0G Newton Testnet) ──────────────────────────
+#
+# Usage:
+#   docker compose up --build          # start everything
+#   docker compose up backend          # backend only
+#   docker compose logs -f backend     # tail backend logs
+#   docker compose down                # stop all
+#
+# Prerequisites:
+#   - Copy 0g_storage_service/.env.example → 0g_storage_service/.env and fill in values
+#   - Copy beyond-the-fog-next/.env.local.example → beyond-the-fog-next/.env.local (if exists)
+
+services:
+
+  # ── Unified Core (Node.js backend) ─────────────────────────────────────────
+  backend:
+    build:
+      context: ./0g_storage_service
+      dockerfile: Dockerfile
+    container_name: btf-backend
+    restart: unless-stopped
+    ports:
+      - "3002:3002"
+    env_file:
+      - ./0g_storage_service/.env
+    volumes:
+      # Persist dialogue map and logs across container restarts
+      - btf-data:/app/data
+      - btf-logs:/app/logs
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3002/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - btf-net
+
+  # ── Next.js Frontend ────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./beyond-the-fog-next
+      dockerfile: Dockerfile
+    container_name: btf-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID=${NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID:-beyond-the-fog-local}
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - btf-net
+
+volumes:
+  btf-data:
+  btf-logs:
+
+networks:
+  btf-net:
+    driver: bridge
