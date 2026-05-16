@@ -1,8 +1,8 @@
-# Towns Whisper
+# Beyond The Fog
 
 > **An AI-native mystery world where conversation becomes gameplay, identity becomes an evolving iNFT, and on-chain value becomes part of the player journey.**
 
-Towns Whisper is a narrative mystery game built around three ideas:
+Byond The Fog is a narrative mystery game built around three ideas:
 
 1. **AI should create live play, not static flavor text**
 2. **Player identity should persist as an on-chain intelligent asset**
