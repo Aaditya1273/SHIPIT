@@ -95,6 +95,7 @@ export class LoadingScene extends Phaser.Scene {
     this.load.image("animals01", "assets/images/world/animals01.png");
     this.load.audio("background_music", "assets/music/background_audio.mp3");
     this.load.audio("thunder", "assets/music/thunder.mp3");
+    this.load.image("heart", "/assets/images/heart.png");
     
     for (let i = 1; i <= 10; i++) {
     this.load.image(`avatar_${i}`, `/assets/images/characters/mc_${i}.png`);
@@ -125,13 +126,23 @@ export class LoadingScene extends Phaser.Scene {
       progressBox.destroy();
       percentText.destroy();
       assetText.destroy();
-      loadingText.setText('Loading Complete!');
-      this.scene.start(this.dataToPass.nextScene, this.dataToPass);
+      loadingText.setText('Almost ready...');
+
+      // Single authoritative transition — full dataToPass forwarded intact
+      this.time.delayedCall(400, () => {
+        this.cameras.main.fadeOut(500, 0, 0, 0);
+        this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
+          this.scene.start(this.dataToPass.nextScene || 'HomeScene', this.dataToPass);
+        });
+      });
     });
   }
 
   create() {
-      const framePadding = 20;
+    // Camera mask for rounded frame — DO NOT start scenes here.
+    // The scene transition is handled exclusively in preload()'s 'complete' handler
+    // to ensure the full dataToPass (including gameData, signer, provider) is forwarded.
+    const framePadding = 20;
     const frameWidth = this.cameras.main.width - framePadding * 2;
     const frameHeight = this.cameras.main.height - framePadding * 2;
     const cornerRadius = 30;
@@ -145,19 +156,5 @@ export class LoadingScene extends Phaser.Scene {
     frame.lineStyle(10, 0xd4af37, 1);
     frame.strokeRoundedRect(framePadding, framePadding, frameWidth, frameHeight, cornerRadius);
     frame.setDepth(100);
-    const width = this.cameras.main.width;
-    const height = this.cameras.main.height;
-
-    this.time.delayedCall(500, () => {
-      this.cameras.main.fadeOut(500, 0, 0, 0);
-      this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
-         const payload = { 
-           playerGender: this.playerGender,
-           account: this.account,
-           suiClient: this.suiClient
-         };
-        this.scene.start(this.nextScene, payload);
-      });
-    });
   }
 }

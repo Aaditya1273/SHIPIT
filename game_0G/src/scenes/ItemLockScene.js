@@ -10,6 +10,8 @@ export class ItemLockScene extends Phaser.Scene {
         this.gameData = null;
         this.statusText = null;
         this.playerInventory = null;
+        this.requiredItem = null;
+        this.isTrading = false;
     }
 
     init(data) {
@@ -19,6 +21,7 @@ export class ItemLockScene extends Phaser.Scene {
         this.account = data.account;
         this.gameData = data.gameData;
         this.playerInventory = data.playerInventory;
+        this.requiredItem = data.villager?.requiredItem ?? null;
     }
 
     create() {
@@ -28,13 +31,20 @@ export class ItemLockScene extends Phaser.Scene {
         const panelX = this.cameras.main.centerX;
         const panelY = this.cameras.main.centerY;
 
+        // Guard: if villager has no required item, just close immediately
+        if (!this.villager || !this.requiredItem) {
+            console.warn('[ItemLockScene] No requiredItem on villager — closing scene.');
+            this.closeScene();
+            return;
+        }
+
         this.add.graphics()
             .fillStyle(0x1a1a1a, 1)
             .fillRoundedRect(panelX - panelWidth / 2, panelY - panelHeight / 2, panelWidth, panelHeight, 16)
             .lineStyle(2, 0xd4af37, 1)
             .strokeRoundedRect(panelX - panelWidth / 2, panelY - panelHeight / 2, panelWidth, panelHeight, 16);
 
-        const requiredItemName = this.villager.requiredItem.replace(/_/g, ' ');
+        const requiredItemName = this.requiredItem.replace(/_/g, ' ');
 
         this.add.text(panelX, panelY - panelHeight / 2+ 50, `Villager Requires ${requiredItemName}`, {
             fontFamily: 'Georgia, serif', fontSize: '32px', color: '#ffffff', align: 'center'
@@ -44,7 +54,7 @@ export class ItemLockScene extends Phaser.Scene {
             fontFamily: 'Arial', fontSize: '20px', color: '#dddddd', align: 'center', wordWrap: { width: panelWidth - 80 }
         }).setOrigin(0.5);
 
-        const hasItem = this.playerInventory && this.playerInventory.has(this.villager.requiredItem);
+        const hasItem = this.playerInventory && this.playerInventory.has(this.requiredItem);
         
         this.statusText = this.add.text(panelX, panelY + 50, 
             hasItem ? `You have the ${requiredItemName}!` : `You need to find a ${requiredItemName} first.`, 
@@ -62,26 +72,48 @@ export class ItemLockScene extends Phaser.Scene {
     }
 
     async tradeItem() {
-        this.statusText.setText(`Offering ${this.villager.requiredItem.replace(/_/g, ' ')}...`);
+        if (this.isTrading) {
+            return;
+        }
+
+        if (!this.requiredItem) {
+            console.warn('[ItemLockScene] tradeItem called without a requiredItem.');
+            this.statusText?.setText("This villager no longer needs an item.");
+            this.statusText?.setColor('#ff6b6b');
+            this.time.delayedCall(1000, () => this.closeScene());
+            return;
+        }
+
+        this.isTrading = true;
+        this.statusText.setText(`Offering ${this.requiredItem.replace(/_/g, ' ')}...`);
 
         try {
             // Local inventory management for the 0G flow
             const homeScene = this.scene.get('HomeScene');
             if (homeScene && homeScene.playerInventory) {
-                homeScene.playerInventory.delete(this.villager.requiredItem);
+                homeScene.playerInventory.delete(this.requiredItem);
+            }
+            if (this.villager) {
+                this.villager.requiredItem = null;
+                if (this.villager.lockIcon) {
+                    this.villager.lockIcon.setVisible(false);
+                }
             }
 
             this.statusText.setText("Offer accepted! The villager is now willing to talk.");
             this.statusText.setColor('#4CAF50');
             
             // Emit event to HomeScene
-            homeScene.events.emit('villagerUnlocked', this.villager.name);
+            if (homeScene) {
+                homeScene.events.emit('villagerUnlocked', this.villager.name);
+            }
 
             this.time.delayedCall(1500, () => this.closeScene());
 
         } catch (error) {
             console.error("Trade failed:", error);
             this.statusText.setText("Trade failed.");
+            this.isTrading = false;
         }
     }
 

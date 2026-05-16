@@ -17,6 +17,38 @@ const STORY_DIALOGUES = [
 export default function Home() {
   const [isGameVisible, setGameVisible] = useState(false);
   const [showStory, setShowStory] = useState(false);
+  const audioRef = React.useRef(null);
+
+  useEffect(() => {
+    // Check for active session on load
+    const activeSession = localStorage.getItem('btf_session_active');
+    if (activeSession === 'true') {
+      setGameVisible(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.volume = 0.95;
+      
+      const playAudio = () => {
+        audioRef.current.play().catch(err => {
+          // Fallback if autoplay is blocked: wait for first interaction
+          console.log("Autoplay blocked, waiting for interaction");
+        });
+        window.removeEventListener('click', playAudio);
+        window.removeEventListener('keydown', playAudio);
+      };
+
+      window.addEventListener('click', playAudio);
+      window.addEventListener('keydown', playAudio);
+      
+      return () => {
+        window.removeEventListener('click', playAudio);
+        window.removeEventListener('keydown', playAudio);
+      };
+    }
+  }, []);
 
   const enterFullScreen = () => {
     const docEl = document.documentElement;
@@ -69,6 +101,11 @@ export default function Home() {
               playsInline
               className="absolute top-0 left-0 w-full h-full object-cover z-0 opacity-40 grayscale"
               style={{ filter: 'blur(8px)' }}
+              onCanPlay={(e) => {
+                e.target.play().catch(err => {
+                  if (err.name !== 'AbortError') console.warn("Story video play interrupted:", err);
+                });
+              }}
             >
               <source src="/assets/cut-scene/landing_bg_video.mp4" type="video/mp4" />
             </video>
@@ -92,6 +129,9 @@ export default function Home() {
               playsInline
               className="absolute top-0 left-0 w-full h-full object-cover z-0"
               style={{ filter: 'brightness(0.3) contrast(1.1)' }}
+              onCanPlay={(e) => {
+                e.target.play().catch(err => console.warn("Video play interrupted:", err));
+              }}
             >
               <source src="/assets/cut-scene/landing_bg_video.mp4" type="video/mp4" />
             </video>
@@ -101,6 +141,7 @@ export default function Home() {
           </motion.div>
         )}
       </AnimatePresence>
+      <audio ref={audioRef} src="/assets/music/landing.mp3" loop />
     </main>
   );
 }

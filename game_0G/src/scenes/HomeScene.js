@@ -1,7 +1,8 @@
 import * as Phaser from "phaser";
 import { AvatarUtils } from "../utils/avatarUtils.js";
+import { ethers } from "ethers";
 import { startNewGame, getConversation, mintItem } from "../api.js";
-import { CHAIN_ID, RPC_URL } from "../contractConfig.js";
+import { CHAIN_ID, RPC_URL, GAME_ITEMS_ADDRESS, GAME_ITEMS_ABI } from "../contractConfig.js";
 export class HomeScene extends Phaser.Scene {
   constructor() {
     super({ key: "HomeScene" });
@@ -39,6 +40,8 @@ export class HomeScene extends Phaser.Scene {
     this.gameData = data?.gameData;
     this.userAvatar = data?.userAvatar;
     this.difficulty = data?.difficulty || "Easy";
+    this.guessCount = 0;
+    this.playerInventory = new Set();
   }
 
   preload() {
@@ -85,9 +88,37 @@ export class HomeScene extends Phaser.Scene {
     this.load.image("villager02", "assets/images/characters/villager02.png");
     this.load.image("villager03", "assets/images/characters/villager03.png");
     this.load.image("villager04", "assets/images/characters/villager04.png");
+    this.load.image("heart", "/assets/images/heart.png");
   }
 
-  async create() {
+  create() {
+    // Save session for refresh persistence
+    if (this.gameData && this.account) {
+      localStorage.setItem('btf_session_active', 'true');
+      localStorage.setItem('btf_active_session_data', JSON.stringify({
+        gameData: this.gameData,
+        difficulty: this.difficulty,
+        userAvatar: this.userAvatar,
+        account: this.account
+      }));
+    }
+
+    try {
+      this._create();
+    } catch (err) {
+      console.error("HomeScene create error:", err);
+      const width = this.cameras.main.width;
+      const height = this.cameras.main.height;
+      this.add.text(width / 2, height / 2, `Critical Error: ${err.message}\nPlease check console and refresh.`, { 
+        fontSize: '20px', 
+        fill: '#ff0000', 
+        align: 'center',
+        backgroundColor: '#000000'
+      }).setOrigin(0.5).setDepth(1000);
+    }
+  }
+
+  async _create() {
     this.startTime = this.time.now;
     const width = this.cameras.main.width;
     const height = this.cameras.main.height;
@@ -96,8 +127,8 @@ export class HomeScene extends Phaser.Scene {
     const overlay = this.add.rectangle(0, 0, width, height, 0x000000, 0.9).setOrigin(0).setDepth(200);
 
     // Create main loading panel with better styling
-    const panelWidth = 600;
-    const panelHeight = 300;
+    const panelWidth = Math.min(width * 0.9, 500);
+    const panelHeight = Math.min(height * 0.9, 450);
     const panelX = width / 2 - panelWidth / 2;
     const panelY = height / 2 - panelHeight / 2;
 
@@ -181,12 +212,13 @@ export class HomeScene extends Phaser.Scene {
       loop: true
     });
 
-    // Extended progress bar animation (3 seconds instead of 2)
+    // Extended progress bar animation (scaled based on whether data is already fetched)
     let progress = 0;
+    const progressSpeed = this.gameData ? 0.05 : 0.005; // 10x faster if data is already here
     const progressTimer = this.time.addEvent({
       delay: 50, // Smoother animation with smaller intervals
       callback: () => {
-        progress += 0.005; // Slower increment for 3-second duration
+        progress += progressSpeed;
         if (progress > 1) progress = 1;
 
         // Create gradient progress bar
@@ -236,11 +268,30 @@ export class HomeScene extends Phaser.Scene {
       loop: true
     });
 
-    console.log("diffulty - ", this.difficulty);
+    statusText.setText('Fog initialized...');
+    console.log("difficulty - ", this.difficulty);
 
-    const { game_id, inaccessible_locations, villagers } = await startNewGame(this.difficulty);
+    let game_id, inaccessible_locations, villagers;
+    if (this.gameData) {
+      game_id = this.gameData.game_id;
+      inaccessible_locations = this.gameData.inaccessible_locations;
+      villagers = this.gameData.villagers;
+    } else {
+      const response = await startNewGame(this.account, this.difficulty);
+      if (response) {
+        this.gameData = response;
+        game_id = response.game_id;
+        inaccessible_locations = response.inaccessible_locations;
+        villagers = response.villagers;
+      } else {
+        progressTimer.destroy();
+        dotsTimer.destroy();
+        this.add.text(width / 2, height / 2, 'Error: Failed to connect to backend.\nPlease refresh the page.', { fontSize: '24px', fill: '#ff0000', align: 'center' }).setOrigin(0.5).setDepth(300);
+        return;
+      }
+    }
     
-    if (!this.scene.isActive()) return;
+    // if (!this.scene.isActive()) return; // Removed: This was causing early exit during scene startup
 
     // Complete the progress bar with final animation
     progressTimer.destroy();
@@ -302,7 +353,10 @@ export class HomeScene extends Phaser.Scene {
         this.add.text(this.cameras.main.width / 2, this.cameras.main.height / 2, 'Error: Could not start a new game.\nPlease check the server and refresh.', { fontSize: '24px', fill: '#ff0000', align: 'center' }).setOrigin(0.5);
         return;
       }
+      statusText.setText('Gemini mystery received...');
       this.gameData = { game_id, inaccessible_locations, villagers };
+      this.registry.set("elapsedTime", 0);
+      this.registry.set("elapsedTimeSessionId", game_id);
 
       // Ensure villagers array exists
       if (!this.gameData.villagers) {
@@ -394,6 +448,7 @@ export class HomeScene extends Phaser.Scene {
         { x: 1, y: 11, width: 16, height: 1 },
       ];
 
+      statusText.setText('Clearing paths...');
       pathTiles.forEach((path) => {
         for (let x = path.x; x < path.x + path.width; x++) {
           for (let y = path.y; y < path.y + path.height; y++) {
@@ -452,6 +507,7 @@ export class HomeScene extends Phaser.Scene {
       }
 
       // Buildings
+      statusText.setText('Building structures...');
       this.createObstacle(0.5, 0.7, "house01", 4, 4);
       this.createObstacle(5.5, 13.7, "house01", 5, 5);
       this.createObstacle(14, 0.8, "house01", 4.5, 4.5);
@@ -479,6 +535,8 @@ export class HomeScene extends Phaser.Scene {
       this.createObstacle(5.5, 10.6, "lake01", 5, 4.5);
       this.createObstacle(26.5, 15.4, "lake01", 7, 7);
 
+      // Nature & Objects
+      statusText.setText('Decorating nature...');
       // Trees
       this.createObstacle(5.3, 6.5, "tree01", 4, 4);
       this.createObstacle(6.8, 6.5, "tree01", 4, 4);
@@ -607,6 +665,7 @@ export class HomeScene extends Phaser.Scene {
         );
       })(this.gameData, villagerSpriteMap, currentGameItems);
 
+      statusText.setText('Summoning villagers...');
       this.gameData.villagers.forEach(villagerData => {
         const spriteInfo = villagerSpriteMap[villagerData.id];
         if (spriteInfo) {
@@ -636,7 +695,8 @@ export class HomeScene extends Phaser.Scene {
 
     this.createObstacle(6, 0.3, "crop03", 2, 2);
 
-    this.createPlayer(1.3, 5);
+    statusText.setText('Awakening player...');
+    this.createPlayer(this.initialPlayerPos.x, this.initialPlayerPos.y);
 
     this.cameras.main.startFollow(this.player);
     this.cameras.main.setLerp(0.1, 0.1);
@@ -740,8 +800,8 @@ export class HomeScene extends Phaser.Scene {
 
     tutorialContainer.add(bg);
 
-    const panelWidth = 800;
-    const panelHeight = 550;
+    const panelWidth = Math.min(width * 0.9, 550);
+    const panelHeight = Math.min(height * 0.9, 450);
     const panelX = width / 2 - panelWidth / 2;
     const panelY = height / 2 - panelHeight / 2;
 
@@ -771,9 +831,9 @@ export class HomeScene extends Phaser.Scene {
     // Steps Content
     const stepsConfig = {
       fontFamily: "Arial",
-      fontSize: "20px",
+      fontSize: "16px",
       color: "#e0e0e0",
-      wordWrap: { width: panelWidth - 100 }
+      wordWrap: { width: panelWidth - 80 }
     };
 
     const steps = [
@@ -784,11 +844,11 @@ export class HomeScene extends Phaser.Scene {
       "5. Open your Daily Chest in the menu for rewards!"
     ];
 
-    let currentY = panelY + 100;
+    let currentY = panelY + 80;
     steps.forEach((step, index) => {
-      const stepText = this.add.text(panelX + 50, currentY, step, stepsConfig);
+      const stepText = this.add.text(panelX + 40, currentY, step, stepsConfig);
       tutorialContainer.add(stepText);
-      currentY += 50;
+      currentY += 40;
     });
 
     // Don't Show Again Checkbox
@@ -800,7 +860,7 @@ export class HomeScene extends Phaser.Scene {
     const checkboxCheck = this.add.text(checkboxX, checkboxY, '✓', { fontSize: '20px', color: '#d4af37' }).setOrigin(0.5).setVisible(false);
 
     const checkboxLabel = this.add.text(checkboxX + 20, checkboxY, "Don't show this again", {
-      fontFamily: "Arial", fontSize: "18px", color: "#cccccc"
+      fontFamily: "Arial", fontSize: "14px", color: "#cccccc"
     }).setOrigin(0, 0.5);
 
     // Make checkbox interactive
@@ -825,7 +885,7 @@ export class HomeScene extends Phaser.Scene {
     btnBg.strokeRoundedRect(-100, -25, 200, 50, 15);
 
     const btnText = this.add.text(0, 0, "Start Adventure", {
-      fontFamily: "Georgia, serif", fontSize: "22px", color: "#ffffff", stroke: "#000000", strokeThickness: 2
+      fontFamily: "Georgia, serif", fontSize: "18px", color: "#ffffff", stroke: "#000000", strokeThickness: 2
     }).setOrigin(0.5);
 
     button.add([btnBg, btnText]);
@@ -1056,7 +1116,7 @@ export class HomeScene extends Phaser.Scene {
       this.resetFeedbackText.setText('Hold [R] for 1.5s to reset position...').setVisible(true);
       // Start a timer to reset after 1.5 seconds
       this.resetTimer = this.time.delayedCall(1500, () => {
-        this.player.setPosition(this.initialPlayerPos.x, this.initialPlayerPos.y);
+        this.player.setPosition(this.initialPlayerPos.x * this.tileSize, this.initialPlayerPos.y * this.tileSize);
         this.resetFeedbackText.setText('Position has been reset!');
         // Hide the message after another second
         this.time.delayedCall(1000, () => {
@@ -1237,7 +1297,7 @@ export class HomeScene extends Phaser.Scene {
     this.villagers.getChildren().forEach(villager => {
       if (villager.lockIcon) {
         villager.lockIcon.setPosition(villager.x, villager.y - 25);
-        const isLocked = !!villager.requiredItem;
+        const isLocked = !!villager.requiredItem && !this.playerInventory.has(villager.requiredItem);
         villager.lockIcon.setVisible(isLocked);
       }
     });
@@ -1251,9 +1311,20 @@ export class HomeScene extends Phaser.Scene {
     const villager = this.villagers.getChildren().find(v => v.name === villagerName);
     if (villager) {
       console.log(`Unlocking villager: ${villagerName}`);
+      const requiredItem = villager.requiredItem;
       villager.requiredItem = null;
-      // Force update inventory from blockchain after unlocking
-      this.updateInventory();
+      if (villager.lockIcon) {
+        villager.lockIcon.setVisible(false);
+      }
+
+      const villagerData = this.gameData?.villagers?.find(v => v.id === villagerName);
+      if (villagerData) {
+        villagerData.required_item = null;
+      }
+
+      if (requiredItem) {
+        this.playerInventory.delete(requiredItem);
+      }
     }
   }
 
@@ -1324,26 +1395,44 @@ export class HomeScene extends Phaser.Scene {
     if (!this.provider || !this.account) return;
 
     try {
-      const { GAME_ITEMS_ADDRESS, GAME_ITEMS_ABI } = await import("../contractConfig.js");
       const contract = new ethers.Contract(GAME_ITEMS_ADDRESS, GAME_ITEMS_ABI, this.provider);
-      
-      const itemMap = { "RUSTY_KEY": 0, "FOG_LANTERN": 1, "ANCIENT_MAP": 2 };
+
+      // GameItems is ERC-721 — read Transfer events to/from this account
+      const filterTo   = contract.filters.Transfer(null, this.account);
+      const filterFrom = contract.filters.Transfer(this.account, null);
+
+      const [toEvents, fromEvents] = await Promise.all([
+        contract.queryFilter(filterTo,   0, 'latest'),
+        contract.queryFilter(filterFrom, 0, 'latest'),
+      ]);
+
+      // Build owned token set: received minus sent
+      const owned = new Map(); // tokenId -> true/false
+      for (const e of toEvents)   owned.set(e.args.tokenId.toString(), true);
+      for (const e of fromEvents) owned.set(e.args.tokenId.toString(), false);
+
       this.playerInventory.clear();
 
-      for (const [name, id] of Object.entries(itemMap)) {
-        const balance = await contract.balanceOf(this.account, id);
-        if (balance > 0n) {
-          this.playerInventory.add(name);
+      for (const [tokenId, isOwned] of owned.entries()) {
+        if (!isOwned) continue;
+        try {
+          const [name] = await contract.getItem(tokenId);
+          const itemKey = name.replace(/ /g, '_').toUpperCase();
+          this.playerInventory.add(itemKey);
+          console.log(`[Inventory] Token ${tokenId} → ${itemKey}`);
+        } catch (e) {
+          console.warn(`[Inventory] Could not fetch item for tokenId ${tokenId}:`, e.message);
         }
       }
 
+      // Merge any pending items from chest openings
       const pendingItems = this.registry.get('pendingInventoryItems') || [];
       pendingItems.forEach(item => this.playerInventory.add(item));
       this.registry.set('pendingInventoryItems', []);
 
-      console.log('Updated inventory:', Array.from(this.playerInventory));
+      console.log('[Inventory] Updated:', Array.from(this.playerInventory));
     } catch (error) {
-      console.error('Failed to update inventory:', error);
+      console.error('[Inventory] Failed to update:', error);
     }
   }
 }

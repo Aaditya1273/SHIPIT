@@ -26,10 +26,10 @@ export const ogGalileo = defineChain({
 });
 
 export const config = getDefaultConfig({
-  appName: 'Echoes of the Village',
+  appName: 'Beyond The Fog',
   projectId: process.env.NEXT_PUBLIC_STITCH_PROJECT_ID || '5f698552d0b018a74f7b4e02980d3cc7', 
   chains: [ogGalileo],
-  ssr: true, 
+  ssr: false, 
 });
 
 const queryClient = new QueryClient();

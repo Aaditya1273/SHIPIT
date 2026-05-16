@@ -23,56 +23,63 @@ export class DialogueScene extends Phaser.Scene {
     }
 
     create() {
-
         this.initTTS();
-        const framePadding = 20;
-        const frameWidth = this.cameras.main.width - framePadding * 2;
-        const frameHeight = this.cameras.main.height - framePadding * 2;
-        const cornerRadius = 30;
-
-        const maskShape = this.make.graphics();
-        maskShape.fillStyle(0xd4af37);
-        maskShape.fillRoundedRect(framePadding, framePadding, frameWidth, frameHeight, cornerRadius);
-        this.cameras.main.setMask(maskShape.createGeometryMask());
-
-        const frame = this.add.graphics();
-        frame.lineStyle(10, 0xd4af37, 1);
-        frame.strokeRoundedRect(framePadding, framePadding, frameWidth, frameHeight, cornerRadius);
-        frame.setDepth(100);
-        this.add.rectangle(0, 0, this.cameras.main.width, this.cameras.main.height, 0x000000, 0.7).setOrigin(0);
+        const { width, height } = this.cameras.main;
         
-        const panelWidth = this.cameras.main.width * 0.9;
-        const panelHeight = this.cameras.main.height * 0.8;
-        const panelX = this.cameras.main.centerX;
-        const panelY = this.cameras.main.centerY;
+        // Backdrop with heavy blur
+        this.add.rectangle(0, 0, width, height, 0x000000, 0.9).setOrigin(0).setInteractive();
 
-        const mainPanel = this.add.graphics()
-            .fillStyle(0x1a1a1a, 1)
-            .fillRoundedRect(panelX - panelWidth / 2, panelY - panelHeight / 2, panelWidth, panelHeight, 16)
-            .lineStyle(2, 0xd4af37, 1)
-            .strokeRoundedRect(panelX - panelWidth / 2, panelY - panelHeight / 2, panelWidth, panelHeight, 16);
+        const panelWidth = width * 0.85;
+        const panelHeight = height * 0.75;
+        const px = width / 2;
+        const py = height / 2;
 
-        // --- UI Creation ---
-        this.createLeftPanel(panelX, panelY, panelWidth, panelHeight);
+        // Glassmorphism Main Panel
+        const graphics = this.add.graphics();
+        graphics.fillStyle(0x0a0a0a, 0.8);
+        graphics.fillRoundedRect(px - panelWidth/2, py - panelHeight/2, panelWidth, panelHeight, 32);
+        graphics.lineStyle(2, 0x2dd4bf, 0.3);
+        graphics.strokeRoundedRect(px - panelWidth/2, py - panelHeight/2, panelWidth, panelHeight, 32);
+
+        // Portrait Section
+        const portraitX = px - panelWidth/2 + 200;
+        const portraitY = py;
         
+        this.add.image(portraitX, portraitY, this.villagerSpriteKey)
+            .setScale(0.8)
+            .setOrigin(0.5);
+
+        // Info Panel
+        const infoY = py + panelHeight/2 - 100;
+        const villagerName = this.conversationData.villager_name || "VILLAGER";
+        const currentVillagerInfo = this.newGameData.villagers.find(v => v.id === this.conversationData.villager_id);
+        const villagerTitle = currentVillagerInfo ? currentVillagerInfo.title : "MYSTERIOUS FIGURE";
+
+        this.add.text(portraitX, infoY, villagerName.toUpperCase(), {
+            fontFamily: 'Cinzel', fontSize: '32px', color: '#ffffff', fontWeight: '900', letterSpacing: 4
+        }).setOrigin(0.5);
+
+        this.add.text(portraitX, infoY + 40, villagerTitle.toUpperCase(), {
+            fontFamily: 'Inter', fontSize: '14px', color: '#2dd4bf', fontWeight: '700', letterSpacing: 2
+        }).setOrigin(0.5);
+
+        // Dialogue Section
         this.rightPanelContainer = this.add.container();
-        this.displayConversationInRightPanel(panelX, panelY, panelWidth, panelHeight);
+        this.displayConversationInRightPanel(px + 100, py - 100, panelWidth - 400, panelHeight);
 
-        const closeButton = this.add.text(panelX, panelY + panelHeight / 2 - 20, 'Close Conversation', {
-            fontFamily: 'Arial',
-            fontSize: '18px',
-            color: '#ff4444',
-            fontStyle: 'italic'
+        // Close Icon
+        const closeBtn = this.add.text(width - 60, 60, '✕', {
+            fontFamily: 'Arial', fontSize: '32px', color: '#ffffff'
         }).setOrigin(0.5).setInteractive({ useHandCursor: true });
-
-        closeButton.on('pointerdown', () => {
+        
+        closeBtn.on('pointerdown', () => {
             this.stopSpeaking();
             this.scene.stop();
             this.scene.resume('HomeScene');
         });
+        closeBtn.on('pointerover', () => closeBtn.setColor('#ff4444'));
+        closeBtn.on('pointerout', () => closeBtn.setColor('#ffffff'));
 
-        // --- Entry Animation ---
-        // Fade in the entire scene for a smooth transition
         this.cameras.main.fadeIn(500, 0, 0, 0);
     }
 
@@ -143,142 +150,82 @@ export class DialogueScene extends Phaser.Scene {
         this.stopSpeaking();
     }
 
-
-    createLeftPanel(panelX, panelY, panelWidth, panelHeight) {
-        const leftPanelX = panelX - panelWidth / 4;
-        const leftPanelY = panelY;
-
-        const villagerImage = this.add.image(leftPanelX, leftPanelY - panelHeight / 6, this.villagerSpriteKey)
-            .setScale(0.67)
-            .setOrigin(0.5);
-
-        const villagerName = this.conversationData.villager_name || "Villager";
-        
-        // Correctly find the villager's title from the initial game data
-        const currentVillagerInfo = this.newGameData.villagers.find(v => v.id=== this.conversationData.villager_id);
-        const villagerTitle = currentVillagerInfo ? currentVillagerInfo.title : "Mysterious Figure";
-
-        // --- Polished Title Display ---
-        const nameText = this.add.text(leftPanelX, leftPanelY + panelHeight / 4 - 20, villagerName, {
-            fontFamily: 'Georgia, serif',
-            fontSize: '32px',
-            color: '#ffffff',
-            fontStyle: 'bold',
-            align: 'center'
-        }).setOrigin(0.5);
-
-        const titleBg = this.add.graphics()
-            .fillStyle(0x000000, 0.5)
-            .fillRoundedRect(leftPanelX - 150, leftPanelY + panelHeight / 4 + 35, 300, 30, 15);
-
-        const titleText = this.add.text(leftPanelX, leftPanelY + panelHeight / 4 + 50, villagerTitle, {
-            fontFamily: 'Arial',
-            fontSize: '18px',
-            color: '#d4af37',
-            fontStyle: 'italic'
-        }).setOrigin(0.5);
-
-        // Animate the text appearing
-        this.tweens.add({
-            targets: [nameText, titleBg, titleText, villagerImage],
-            alpha: { from: 0, to: 1 },
-            duration: 800,
-            ease: 'Sine.easeInOut'
-        });
-    }
-
-    displayConversationInRightPanel(panelX, panelY, panelWidth, panelHeight) {
+    displayConversationInRightPanel(x, y, width, height) {
         this.rightPanelContainer.removeAll(true);
-
-        const rightPanelX = panelX + panelWidth / 4;
-        const rightPanelY = panelY - panelHeight / 2 + 50;
         
-        const textStyle = {
-            fontFamily: 'Arial',
-            fontSize: '20px',
-            color: '#e0e0e0',
-            fontStyle: 'italic',
-            wordWrap: { width: panelWidth / 2 - 60 }
-        };
-
-        const dialogueText = this.add.text(rightPanelX, rightPanelY, `"${this.conversationData.npc_dialogue}"`, textStyle).setOrigin(0.5, 0);
-        this.rightPanelContainer.add(dialogueText);
-        this.speakText(this.conversationData.npc_dialogue,this.conversationData.villagerName);
-
-        let startY = rightPanelY + dialogueText.getBounds().height + 50;
+        const dialogue = this.add.text(x, y, `"${this.conversationData.npc_dialogue}"`, {
+            fontFamily: 'Inter', fontSize: '24px', color: '#ffffff', fontStyle: 'italic', wordWrap: { width: width - 100 }, lineSpacing: 10
+        }).setOrigin(0.5, 0);
         
-        // --- Create Stylish Suggestion Buttons ---
-        this.conversationData.player_suggestions.forEach((suggestion, index) => {
-            const button = this.createSuggestionButton(rightPanelX, startY + (index * 70), suggestion, () => {
+        this.rightPanelContainer.add(dialogue);
+        this.speakText(this.conversationData.npc_dialogue);
+
+        let startY = y + dialogue.getBounds().height + 80;
+
+        this.conversationData.player_suggestions.forEach((suggestion, i) => {
+            const btn = this.createSuggestionButton(x, startY + (i * 70), suggestion, width - 100, () => {
                 this.getNextDialogue(this.conversationData.villager_id, suggestion);
             });
-            this.rightPanelContainer.add(button);
-
-            // Staggered fade-in animation for each button
-            button.setAlpha(0);
-            this.tweens.add({
-                targets: button,
-                alpha: 1,
-                duration: 500,
-                delay: 200 + (index * 150),
-                ease: 'Sine.easeInOut'
-            });
+            this.rightPanelContainer.add(btn);
+            btn.setAlpha(0);
+            this.tweens.add({ targets: btn, alpha: 1, y: '+=10', duration: 400, delay: i * 100 });
         });
     }
 
-    createSuggestionButton(x, y, text, callback) {
-        const buttonWidth = 400;
-        const buttonHeight = 50;
+    createSuggestionButton(x, y, text, width, callback) {
         const container = this.add.container(x, y);
+        const bg = this.add.graphics();
+        bg.fillStyle(0x1a1a1a, 0.9);
+        bg.fillRoundedRect(-width/2, -25, width, 50, 12);
+        bg.lineStyle(1, 0x2dd4bf, 0.2);
+        bg.strokeRoundedRect(-width/2, -25, width, 50, 12);
 
-        const background = this.add.graphics()
-            .fillStyle(0x333333, 0.8)
-            .fillRoundedRect(-buttonWidth / 2, -buttonHeight / 2, buttonWidth, buttonHeight, 15);
-
-        const border = this.add.graphics()
-            .lineStyle(2, 0x87ceeb, 1)
-            .strokeRoundedRect(-buttonWidth / 2, -buttonHeight / 2, buttonWidth, buttonHeight, 15);
-
-        const buttonText = this.add.text(0, 0, text, {
-            fontFamily: 'Arial',
-            fontSize: '18px',
-            color: '#87ceeb',
-            wordWrap: { width: buttonWidth - 40 },
-            align: 'center'
+        const txt = this.add.text(0, 0, text, {
+            fontFamily: 'Inter', fontSize: '16px', color: '#2dd4bf', fontWeight: '600'
         }).setOrigin(0.5);
 
-        container.add([background, border, buttonText]);
-        container.setSize(buttonWidth, buttonHeight);
-        container.setInteractive({ useHandCursor: true })
-            .on('pointerdown', callback)
-            .on('pointerover', () => {
-                background.clear().fillStyle(0x4D4D4D, 1).fillRoundedRect(-buttonWidth / 2, -buttonHeight / 2, buttonWidth, buttonHeight, 15);
-                border.clear().lineStyle(2, 0xFFFFFF, 1).strokeRoundedRect(-buttonWidth / 2, -buttonHeight / 2, buttonWidth, buttonHeight, 15);
-                this.tweens.add({ targets: container, scale: 1.05, duration: 200, ease: 'Power1' });
-            })
-            .on('pointerout', () => {
-                background.clear().fillStyle(0x333333, 0.8).fillRoundedRect(-buttonWidth / 2, -buttonHeight / 2, buttonWidth, buttonHeight, 15);
-                border.clear().lineStyle(2, 0x87ceeb, 1).strokeRoundedRect(-buttonWidth / 2, -buttonHeight / 2, buttonWidth, buttonHeight, 15);
-                this.tweens.add({ targets: container, scale: 1, duration: 200, ease: 'Power1' });
-            });
-
+        container.add([bg, txt]);
+        container.setSize(width, 50).setInteractive({ useHandCursor: true });
+        container.on('pointerdown', callback);
+        container.on('pointerover', () => {
+            bg.clear().fillStyle(0x2dd4bf, 1).fillRoundedRect(-width/2, -25, width, 50, 12);
+            txt.setColor('#000000');
+        });
+        container.on('pointerout', () => {
+            bg.clear().fillStyle(0x1a1a1a, 0.9).fillRoundedRect(-width/2, -25, width, 50, 12);
+            txt.setColor('#2dd4bf');
+        });
         return container;
     }
 
     async getNextDialogue(villagerId, playerMessage) {
         this.stopSpeaking();
         this.rightPanelContainer.removeAll(true);
-        const loadingText = this.add.text(this.cameras.main.centerX + this.cameras.main.width / 4, this.cameras.main.centerY, "...", {
-            fontSize: '24px',
-            color: '#ffffff'
-        }).setOrigin(0.5);
+
+        // Guard: scene may have been stopped before async call returns
+        if (!this.scene.isActive()) return;
+
+        const loadingText = this.add.text(
+            this.cameras.main.centerX + this.cameras.main.width / 4,
+            this.cameras.main.centerY,
+            "...",
+            { fontSize: '24px', color: '#ffffff' }
+        ).setOrigin(0.5);
         this.rightPanelContainer.add(loadingText);
 
         const nextData = await getConversation(villagerId, playerMessage, this.account);
 
+        // Guard again — scene may have been stopped while waiting for response
+        if (!this.scene.isActive() || !this.cameras.main) return;
+
         if (nextData) {
             this.conversationData = nextData;
-            this.displayConversationInRightPanel(this.cameras.main.centerX, this.cameras.main.centerY, this.cameras.main.width * 0.9, this.cameras.main.height * 0.8);
+            this.displayConversationInRightPanel(
+                this.cameras.main.centerX,
+                this.cameras.main.centerY,
+                this.cameras.main.width * 0.9,
+                this.cameras.main.height * 0.8
+            );
         } else {
             loadingText.setText("I... have nothing more to say.");
         }

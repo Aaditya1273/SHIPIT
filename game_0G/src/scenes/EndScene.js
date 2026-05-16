@@ -15,72 +15,88 @@ export class EndScene extends Phaser.Scene {
     }
 
     create() {
+        // Clear active session on game completion
+        localStorage.removeItem('btf_session_active');
+        localStorage.removeItem('btf_active_session_data');
+        localStorage.removeItem('btf_game_id');
+        localStorage.removeItem('btf_session_token');
+        this.registry.set('elapsedTime', 0);
+        this.registry.set('elapsedTimeSessionId', null);
+
         this.cameras.main.fadeIn(1000, 0, 0, 0);
-        this.add.rectangle(0, 0, this.cameras.main.width, this.cameras.main.height, 0x050505, 0.95).setOrigin(0);
+        
+        const { width, height } = this.cameras.main;
+        const centerX = width / 2;
+        const centerY = height / 2;
 
-        const centerX = this.cameras.main.centerX;
-        const centerY = this.cameras.main.centerY;
+        // Backdrop
+        this.add.rectangle(0, 0, width, height, 0x050505, 0.95).setOrigin(0);
 
-        const titleText = this.endGameData.isCorrect ? 'MYSTERY SOLVED' : 'LOST IN THE FOG';
-        const titleColor = this.endGameData.isCorrect ? '#2dd4bf' : '#e74c3c';
+        const isWin = this.endGameData.isCorrect;
+        const titleText = isWin ? 'MYSTERY SOLVED' : 'LOST IN THE FOG';
+        const accentColor = isWin ? 0x2dd4bf : 0xe74c3c;
+        const accentHex = isWin ? '#2dd4bf' : '#e74c3c';
 
-        // Title with Cinzel font
-        this.add.text(centerX, centerY - 220, titleText, {
-            fontFamily: 'Cinzel',
-            fontSize: '72px',
-            color: titleColor,
-            stroke: '#000000',
-            strokeThickness: 2,
-            letterSpacing: 4
+        // Premium Panel
+        const panel = this.add.graphics();
+        panel.fillStyle(0x0a0a0a, 0.8);
+        panel.fillRoundedRect(centerX - 350, centerY - 250, 700, 500, 24);
+        panel.lineStyle(2, accentColor, 0.3);
+        panel.strokeRoundedRect(centerX - 350, centerY - 250, 700, 500, 24);
+
+        // Title
+        this.add.text(centerX, centerY - 180, titleText, {
+            fontFamily: 'Cinzel', fontSize: '56px', color: accentHex, fontWeight: '900', letterSpacing: 8
         }).setOrigin(0.5);
 
         // Decorative line
-        const graphics = this.add.graphics();
-        graphics.lineStyle(2, 0x2dd4bf, 0.3);
-        graphics.lineBetween(centerX - 200, centerY - 150, centerX + 200, centerY - 150);
+        panel.lineStyle(1, accentColor, 0.1);
+        panel.lineBetween(centerX - 200, centerY - 120, centerX + 200, centerY - 120);
 
+        // Stats Grid
         const stats = [
-            `SCORE: ${this.endGameData.score}`,
-            `TIME: ${this.endGameData.time}`,
-            `GUESSES: ${this.endGameData.guesses}`,
-            `TRUE ENDING: ${this.endGameData.isTrueEnding ? 'YES' : 'NO'}`
+            { label: 'SCORE', value: this.endGameData.score },
+            { label: 'TIME', value: this.endGameData.time },
+            { label: 'GUESSES', value: this.endGameData.guesses },
+            { label: 'TRUE ENDING', value: this.endGameData.isTrueEnding ? 'YES' : 'NO' }
         ];
 
-        this.add.text(centerX, centerY, stats, {
-            fontFamily: 'Inter',
-            fontSize: '24px',
-            color: '#aaaaaa',
-            align: 'center',
-            lineSpacing: 15,
-            letterSpacing: 2
-        }).setOrigin(0.5);
+        stats.forEach((stat, i) => {
+            const y = centerY - 50 + (i * 45);
+            this.add.text(centerX - 120, y, stat.label, {
+                fontFamily: 'Inter', fontSize: '14px', color: '#666666', letterSpacing: 2
+            }).setOrigin(0, 0.5);
+            
+            this.add.text(centerX + 120, y, stat.value.toString(), {
+                fontFamily: 'Inter', fontSize: '18px', color: '#ffffff', fontWeight: '700'
+            }).setOrigin(1, 0.5);
+        });
 
         // Status Text
-        this.statusText = this.add.text(centerX, centerY + 140, 'SYNCHRONIZING WITH 0G NEWTON...', {
-            fontFamily: 'Inter',
-            fontSize: '14px',
-            color: '#2dd4bf',
-            letterSpacing: 2
+        this.statusText = this.add.text(centerX, centerY + 160, 'SYNCHRONIZING WITH 0G NEWTON...', {
+            fontFamily: 'Inter', fontSize: '12px', color: accentHex, letterSpacing: 2
         }).setOrigin(0.5);
 
-        // Menu Button
-        const menuButton = this.add.text(centerX, centerY + 240, 'RETURN TO THE VOID', {
-            fontFamily: 'Cinzel',
-            fontSize: '24px',
-            color: '#000000',
-            backgroundColor: '#2dd4bf',
-            padding: { x: 40, y: 15 }
-        })
-        .setOrigin(0.5)
-        .setInteractive({ useHandCursor: true })
-        .on('pointerdown', () => window.location.reload())
-        .on('pointerover', () => menuButton.setBackgroundColor('#ffffff'))
-        .on('pointerout', () => menuButton.setBackgroundColor('#2dd4bf'));
+        // Return Button
+        const returnBtn = this.add.container(centerX, centerY + 240);
+        const btnBg = this.add.graphics();
+        btnBg.fillStyle(accentColor, 1);
+        btnBg.fillRoundedRect(-150, -25, 300, 50, 12);
+        const btnText = this.add.text(0, 0, 'RETURN TO VOID', {
+            fontFamily: 'Inter', fontSize: '14px', color: '#000000', fontWeight: '900', letterSpacing: 2
+        }).setOrigin(0.5);
+        
+        returnBtn.add([btnBg, btnText]);
+        returnBtn.setSize(300, 50).setInteractive({ useHandCursor: true });
+        returnBtn.on('pointerdown', () => window.location.reload());
+        returnBtn.on('pointerover', () => btnBg.clear().fillStyle(0xffffff, 1).fillRoundedRect(-150, -25, 300, 50, 12));
+        returnBtn.on('pointerout', () => btnBg.clear().fillStyle(accentColor, 1).fillRoundedRect(-150, -25, 300, 50, 12));
 
         if (this.account) {
             this.finalizeGame();
         }
     }
+
 
     async finalizeGame() {
         if (this.isProcessing) return;
@@ -98,8 +114,8 @@ export class EndScene extends Phaser.Scene {
             });
 
             if (result.success) {
-                const reward = (result.reward / 1e18).toFixed(2);
-                this.statusText.setText(`✓ JOURNEY ANCHORED. REWARD: ${reward} FOG DISTRIBUTED.`);
+                const reward = (result.reward / 1e18).toFixed(4);
+                this.statusText.setText(`✓ JOURNEY ANCHORED. REWARD: ${reward} 0G DISTRIBUTED.`);
                 this.statusText.setColor('#2dd4bf');
             } else {
                 this.statusText.setText('PROTOCOL ERROR: FAILED TO ANCHOR JOURNEY.');
