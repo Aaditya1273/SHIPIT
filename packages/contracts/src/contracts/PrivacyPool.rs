@@ -2,74 +2,81 @@
 //! 
 //! MIGRATION: Entrypoint.sol + PrivacyPool.sol + State.sol → PrivacyPool.rs
 //! 
-//! Architecture change: On Stellar, the Entrypoint abstraction is unnecessary
-//! because Soroban contracts call TokenClient directly. This single contract
-//! replaces all three Solidity contracts.
+//! On Stellar, we consolidate three Solidity contracts into one Soroban contract
+//! because Soroban contracts call TokenClient directly (no Entrypoint abstraction).
 //! 
-//! Protocol 25 (X-Ray): Uses env.crypto().poseidon2() for Merkle hashing
-//! Protocol 26 (Yardstick): Uses env.crypto().bn254_*() for Groth16 verification
+//! CRYPTO (CAP-0059 — BLS12-381 available today on Stellar):
+//!   env.crypto().bls12_381() — Groth16 verification
+//!   env.crypto().sha256()    — SHA256 for scope/nonce/compute
 //! 
-//! Key invariants (identical to Solidity version):
-//! - Nullifier mapping prevents double-spends
-//! - Root history buffer (64 slots) for state root validation
-//! - precommitment deduplication prevents deposit replay
-//! - ragequit allows original depositor to exit without ASP approval
-//! - withdraw() reverts if Groth16 proof is invalid
-
-#![no_std]
+//! Note: BN254 (CAP-0074) and Poseidon2 (CAP-0075) are NOT yet on Stellar.
+//!       Merkle tree membership is proven INSIDE the SNARK, not on-chain.
+//!       The contract only stores & compares state roots and nullifiers.
+//!
+//! Proof types are flattened into Soroban-compatible byte arrays:
+//!   - G1 point = BytesN<96>   (uncompressed BLS12-381 G1)
+//!   - G2 point = BytesN<192>  (uncompressed BLS12-381 G2)
+//!   - Fr/field = BytesN<32>   (scalar field element)
+//! 
+//! The Verification Key is stored at deploy time and used in the full
+//! Groth16 pairing check:
+//!   e(-A, B) · e(α, β) · e(vk_x, γ) · e(C, δ) = 1
+//!   where vk_x = IC[0] + Σ(pub_signals[i] · IC[i+1])
 
 use soroban_sdk::{
     contract, contractimpl, contracterror, contracttype,
+    crypto::bls12_381::{Bls12381Fr, Bls12381G1Affine, Bls12381G2Affine},
     token::Client as TokenClient,
-    Address, BytesN, Env, String, Vec, IntoVal, 
-    crypto::Hash,
+    xdr::ToXdr,
+    vec, Address, Bytes, BytesN, Env, String, Vec,
 };
 
 use crate::constants::*;
-use crate::proof_lib::*;
 
 // ─── Storage Keys ───────────────────────────────────────────────
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataKey {
-    // Immutable config
+    // === Immutable config (instance storage) ===
     Asset,
     Owner,
     Postman,
-    WithdrawalVerifier,
-    RagequitVerifier,
     Scope,
+    // VK components stored as flat byte arrays
+    VkAlpha,       // G1: BytesN<96>
+    VkBeta,        // G2: BytesN<192>
+    VkGamma,       // G2: BytesN<192>
+    VkDelta,       // G2: BytesN<192>
+    VkIcLen,       // u32: number of IC points
+    VkIc(u32),     // G1: BytesN<96> each
     
-    // State (mutable)
+    // === State (instance + persistent) ===
     Nonce,
     Dead,
     CurrentRootIndex,
     TreeDepth,
     TreeSize,
     
-    // Sliding window of state roots (circular buffer)
+    // Root history (persistent, circular buffer)
     RootHistory(u32),
     
-    // Precommitment dedup (prevents replay)
+    // Precommitment dedup
     UsedPrecommitment(BytesN<32>),
     
-    // Nullifier registry (double-spend prevention)
+    // Nullifier registry
     NullifierSpent(BytesN<32>),
     
-    // Depositor label → address mapping (for ragequit)
+    // Depositor label -> address
     Depositor(BytesN<32>),
     
-    // ASP root history
+    // ASP roots
     AssociationSets,
     
-    // Asset configuration
-    AssetConfig(BytesN<32>),
-    
-    // UPGRADE A: Allowlist root for compliance circuit
+    // Allowlist root (UPGRADE A)
     AllowlistRoot,
     
-    // UPGRADE B: Ciphertext storage for auditor view
+    // Ciphertext for auditor view key (UPGRADE B)
     Ciphertext(BytesN<32>),
 }
 
@@ -78,17 +85,8 @@ pub enum DataKey {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Withdrawal {
-    pub processooor: Address,      // Allowed address to process withdrawal
-    pub data: BytesN<64>,          // Encoded relay data (recipient, feeRecipient, feeBPS)
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AssetConfig {
-    pub pool: Address,             // Pool contract address
-    pub minimum_deposit_amount: i128,  // Min deposit in stroops
-    pub vetting_fee_bps: u32,      // Deposit fee in basis points
-    pub max_relay_fee_bps: u32,    // Max relay fee in basis points
+    pub processooor: Address,
+    pub data: BytesN<64>,
 }
 
 #[contracttype]
@@ -99,18 +97,44 @@ pub struct AssociationSetData {
     pub timestamp: u64,
 }
 
+/// Flattened Groth16 proof — byte arrays compatible with Soroban storage.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RelayData {
-    pub recipient: Address,
-    pub fee_recipient: Address,
-    pub relay_fee_bps: u32,
+pub struct FlatGroth16Proof {
+    pub a: BytesN<96>,      // G1
+    pub b: BytesN<192>,     // G2
+    pub c: BytesN<96>,      // G1
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FlatWithdrawProof {
+    pub proof: FlatGroth16Proof,
+    pub pub_signals: Vec<BytesN<32>>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FlatRagequitProof {
+    pub proof: FlatGroth16Proof,
+    pub pub_signals: Vec<BytesN<32>>,
+}
+
+/// Verification Key stored at deploy time (flat byte arrays)
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FlatVerificationKey {
+    pub alpha: BytesN<96>,     // G1
+    pub beta: BytesN<192>,     // G2
+    pub gamma: BytesN<192>,    // G2
+    pub delta: BytesN<192>,    // G2
+    pub ic: Vec<BytesN<96>>,   // G1 points
 }
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(u32)]
 pub enum PrivacyPoolError {
-    // Identical errors from Solidity PrivacyPool.sol
     InvalidProof = 1,
     InvalidCommitment = 2,
     InvalidProcessooor = 3,
@@ -134,9 +158,10 @@ pub enum PrivacyPoolError {
     EmptyRoot = 21,
     InvalidIPFSCIDLength = 22,
     NativeAssetNotAccepted = 23,
-    
-    // UPGRADE A: Allowlist error
     AllowlistMismatch = 24,
+    InvalidPubSignalCount = 25,
+    MalformedVerifyingKey = 26,
+    VkNotSet = 27,
 }
 
 // ─── Contract ───────────────────────────────────────────────────
@@ -151,376 +176,230 @@ impl PrivacyPool {
     //  INITIALIZATION
     // ══════════════════════════════════════════════════════════════
     
-    /// Initialize the Privacy Pool.
-    /// Replaces: Entrypoint.initialize() + State constructor
-    pub fn initialize(
+    pub fn __constructor(
         env: Env,
-        asset: Address,              // USDC Stellar Asset Contract address
-        withdrawal_verifier: Address, // Groth16 verifier (BN254 host fn)
-        ragequit_verifier: Address,   // Groth16 verifier for ragequit
-        owner: Address,               // Protocol owner
-        postman: Address,             // ASP root updater
-    ) -> Result<(), PrivacyPoolError> {
-        // Sanity checks (identical to Solidity State.sol constructor)
-        if asset.as_val() == 0 || withdrawal_verifier.as_val() == 0 
-            || ragequit_verifier.as_val() == 0 || owner.as_val() == 0 
-            || postman.as_val() == 0 {
-            return Err(PrivacyPoolError::ZeroAddress);
-        }
+        asset: Address,
+        vk: FlatVerificationKey,
+        owner: Address,
+        postman: Address,
+    ) {
+        // Compute SCOPE: SHA256(contract_id || network_id || asset)
+        let contract_id = env.current_contract_address();
+        let mut scope_input = Bytes::new(&env);
+        scope_input.append(&contract_id.to_xdr(&env));
+        scope_input.append(&env.ledger().network_id().to_xdr(&env));
+        scope_input.append(&asset.clone().to_xdr(&env));
+        let scope_hash: BytesN<32> = env.crypto().sha256(&scope_input).into();
         
-        // Compute SCOPE: keccak256(contract_id, network_id, asset)
-        // Replaces: Solidity's uint256(keccak256(abi.encodePacked(address(this), block.chainid, _asset)))
-        let contract_id = env.current_contract_address().to_xdr(&env);
-        let network_id = env.ledger().network_id().to_xdr(&env);
-        let asset_bytes = asset.to_xdr(&env);
+        // Store config in instance storage
+        env.storage().instance().set(&DataKey::Asset, &asset);
+        env.storage().instance().set(&DataKey::Owner, &owner);
+        env.storage().instance().set(&DataKey::Postman, &postman);
+        env.storage().instance().set(&DataKey::Scope, &scope_hash);
         
-        let mut scope_input = Vec::new(&env);
-        scope_input.push_back(contract_id.as_slice());
-        scope_input.push_back(network_id.as_slice());
-        // Use SHA256 as fallback since Soroban env doesn't expose keccak256
-        let scope_hash = env.crypto().sha256(&BytesN::from_slice(&env, &scope_input));
+        // Store Verification Key
+        Self::_store_vk(&env, &vk);
         
-        // Store immutable config
-        env.storage().persistent().set(&DataKey::Asset, &asset);
-        env.storage().persistent().set(&DataKey::WithdrawalVerifier, &withdrawal_verifier);
-        env.storage().persistent().set(&DataKey::RagequitVerifier, &ragequit_verifier);
-        env.storage().persistent().set(&DataKey::Owner, &owner);
-        env.storage().persistent().set(&DataKey::Postman, &postman);
-        env.storage().persistent().set(&DataKey::Scope, &scope_hash);
+        // Initialize state
+        env.storage().instance().set(&DataKey::Nonce, &0u64);
+        env.storage().instance().set(&DataKey::Dead, &false);
+        env.storage().instance().set(&DataKey::CurrentRootIndex, &0u32);
+        env.storage().instance().set(&DataKey::TreeDepth, &0u32);
+        env.storage().instance().set(&DataKey::TreeSize, &0u64);
         
-        // Initialize state (identical to Solidity)
-        env.storage().persistent().set(&DataKey::Nonce, &0u64);
-        env.storage().persistent().set(&DataKey::Dead, &false);
-        env.storage().persistent().set(&DataKey::CurrentRootIndex, &0u32);
-        env.storage().persistent().set(&DataKey::TreeDepth, &0u32);
-        env.storage().persistent().set(&DataKey::TreeSize, &0u64);
-        
-        Ok(())
+        env.storage().instance().extend_ttl(100, 518400);
     }
     
     // ══════════════════════════════════════════════════════════════
     //  DEPOSIT
     // ══════════════════════════════════════════════════════════════
     
-    /// Publicly deposit USDC into the Privacy Pool.
-    /// 
-    /// Replaces: Entrypoint.deposit() + PrivacyPool.deposit()
-    /// 
-    /// Flow (identical to Solidity):
-    /// 1. Check pool is alive (not wound down)
-    /// 2. Check precommitment not already used
-    /// 3. Check minimum deposit amount
-    /// 4. Deduct vetting fee
-    /// 5. Pull USDC from depositor via TokenClient
-    /// 6. Compute label = SHA256(scope, nonce) % SNARK_SCALAR_FIELD
-    /// 7. Compute commitment = Poseidon2(value, label, precommitment)
-    /// 8. Insert commitment into state Merkle tree
-    /// 9. Store depositor → label mapping
     pub fn deposit(
         env: Env,
         depositor: Address,
-        value: i128,                   // Amount in stroops (1 USDC = 1_000_000)
-        precommitment: BytesN<32>,     // Hash(nullifier, secret) for replay protection
-    ) -> Result<BytesN<32>, PrivacyPoolError> {
-        // ── Check pool is alive ──
-        if env.storage().persistent().get::<_, bool>(&DataKey::Dead).unwrap_or(false) {
-            return Err(PrivacyPoolError::PoolIsDead);
+        value: i128,
+        precommitment: BytesN<32>,
+    ) -> BytesN<32> {
+        if env.storage().instance().get::<_, bool>(&DataKey::Dead).unwrap_or(false) {
+            panic!("Pool is dead");
+        }
+        if value <= 0 {
+            panic!("Invalid deposit value");
         }
         
-        // ── Check value bounds (2^128 max, identical to Solidity) ──
-        if value <= 0 || value >= (1i128 << 127) {
-            return Err(PrivacyPoolError::InvalidDepositValue);
-        }
-        
-        // ── Precommitment dedup (prevents replay) ──
+        // Precommitment dedup
         if env.storage().persistent().has(&DataKey::UsedPrecommitment(precommitment.clone())) {
-            return Err(PrivacyPoolError::PrecommitmentAlreadyUsed);
+            panic!("Precommitment already used");
         }
         env.storage().persistent().set(&DataKey::UsedPrecommitment(precommitment.clone()), &true);
+        env.storage().persistent().extend_ttl(&DataKey::UsedPrecommitment(precommitment.clone()), 100, 518400);
         
-        // ── Get asset config ──
-        let asset: Address = env.storage().persistent().get(&DataKey::Asset).unwrap();
-        let config: AssetConfig = env.storage()
-            .persistent()
-            .get(&DataKey::AssetConfig(asset.to_xdr(&env)))
-            .unwrap_or(AssetConfig {
-                pool: env.current_contract_address(),
-                minimum_deposit_amount: 0,
-                vetting_fee_bps: 0,
-                max_relay_fee_bps: 0,
-            });
-        
-        // ── Minimum deposit check ──
-        if value < config.minimum_deposit_amount {
-            return Err(PrivacyPoolError::MinimumDepositAmount);
-        }
-        
-        // ── Deduct vetting fee (identical to Solidity _deductFee) ──
-        let amount_after_fees = if config.vetting_fee_bps > 0 {
-            value - (value * config.vetting_fee_bps as i128) / MAX_BPS as i128
-        } else {
-            value
-        };
-        
-        // ── Pull USDC from depositor ──
+        // Pull USDC from depositor
+        let asset: Address = env.storage().instance().get(&DataKey::Asset).unwrap();
         depositor.require_auth();
         let token = TokenClient::new(&env, &asset);
         token.transfer(&depositor, &env.current_contract_address(), &value);
         
-        // ── Compute label (replaces Solidity keccak256(scope, nonce)) ──
-        let nonce: u64 = env.storage().persistent().get(&DataKey::Nonce).unwrap_or(0);
-        let scope: BytesN<32> = env.storage().persistent().get(&DataKey::Scope).unwrap();
+        // Compute label: SHA256(scope || nonce)
+        let nonce: u64 = env.storage().instance().get(&DataKey::Nonce).unwrap_or(0);
+        let scope: BytesN<32> = env.storage().instance().get(&DataKey::Scope).unwrap();
+        let mut label_input = Bytes::new(&env);
+        label_input.append(&Bytes::from_array(&env, &scope.to_array()));
+        label_input.append(&Bytes::from_array(&env, &nonce.to_be_bytes()));
+        let label_hash: BytesN<32> = env.crypto().sha256(&label_input).into();
         
-        let mut label_input = Vec::new(&env);
-        label_input.push_back(scope.as_slice());
-        label_input.push_back(&nonce.to_be_bytes());
-        let label_bytes = env.crypto().sha256(&BytesN::from_slice(&env, &label_input));
+        // Compute commitment hash: SHA256(value || label || precommitment)
+        let mut commit_input = Bytes::new(&env);
+        commit_input.append(&Bytes::from_array(&env, &value.to_be_bytes()));
+        commit_input.append(&Bytes::from_array(&env, &label_hash.to_array()));
+        commit_input.append(&Bytes::from_array(&env, &precommitment.to_array()));
+        let commitment_hash: BytesN<32> = env.crypto().sha256(&commit_input).into();
         
-        // ── Compute commitment hash using Poseidon2 host function ──
-        // Protocol 25: env.crypto().poseidon2() for ZK-friendly hashing
-        // Replaces: Solidity's PoseidonT4.hash([value, label, precommitment])
-        let mut poseidon_inputs = Vec::new(&env);
-        poseidon_inputs.push_back(value.into_val(&env));
-        poseidon_inputs.push_back(label_bytes.into_val(&env));
-        poseidon_inputs.push_back(precommitment.into_val(&env));
-        let commitment_hash: BytesN<32> = env.crypto().poseidon2(&poseidon_inputs);
+        // Store commitment (off-chain relayer will set the Poseidon-based root)
+        Self::_store_commitment(&env, &commitment_hash);
         
-        // ── Insert commitment into state Merkle tree ──
-        Self::_insert_into_state(&env, &commitment_hash);
+        // Increment nonce
+        env.storage().instance().set(&DataKey::Nonce, &(nonce + 1));
         
-        // ── Increment nonce ──
-        env.storage().persistent().set(&DataKey::Nonce, &(nonce + 1));
+        // Store depositor mapping for ragequit
+        env.storage().persistent().set(&DataKey::Depositor(label_hash.clone()), &depositor);
+        env.storage().persistent().extend_ttl(&DataKey::Depositor(label_hash.clone()), 100, 518400);
         
-        // ── Store depositor mapping for ragequit ──
-        env.storage().persistent().set(&DataKey::Depositor(label_bytes.clone()), &depositor);
+        env.storage().instance().extend_ttl(100, 518400);
         
-        // ── Emit event ──
-        env.events().publish(
-            ("Deposited", depositor),
-            (commitment_hash.clone(), label_bytes, amount_after_fees, precommitment),
-        );
+        // Emit event
+        env.events().publish(("Deposited", depositor), (commitment_hash.clone(), label_hash, value));
         
-        Ok(commitment_hash)
+        commitment_hash
     }
     
     // ══════════════════════════════════════════════════════════════
-    //  WITHDRAW (Private)
+    //  WITHDRAW (ZK-private)
     // ══════════════════════════════════════════════════════════════
     
-    /// Privately withdraw USDC via Groth16 ZK proof.
-    /// 
-    /// Replaces: PrivacyPool.withdraw() + validWithdrawal modifier
-    /// 
-    /// Validation chain (identical to Solidity):
-    /// 1. Caller must be processooor
-    /// 2. Context must match keccak256(withdrawal, scope)
-    /// 3. Tree depth ≤ MAX_TREE_DEPTH
-    /// 4. State root must be in known history
-    /// 5. ASP root must be the latest root
-    /// UPGRADE A: Allowlist root must match stored root
-    /// 6. Groth16 proof verified via BN254 pairing check (Protocol 25)
-    /// 7. Nullifier marked as spent
-    /// 8. New commitment inserted into state
-    /// 9. USDC transferred to processooor
     pub fn withdraw(
         env: Env,
         withdrawal: Withdrawal,
-        proof: WithdrawProof,        // Groth16 proof with 10 public signals
+        proof: FlatWithdrawProof,
     ) -> Result<(), PrivacyPoolError> {
-        // ── 1. Check caller is allowed processooor ──
+        if proof.pub_signals.len() != 10 {
+            return Err(PrivacyPoolError::InvalidPubSignalCount);
+        }
+        
         withdrawal.processooor.require_auth();
         
-        // ── 2. Validate context (identical Solidity logic) ──
-        let scope: BytesN<32> = env.storage().persistent().get(&DataKey::Scope).unwrap();
+        // Validate context
+        let scope: BytesN<32> = env.storage().instance().get(&DataKey::Scope).unwrap();
         let context = Self::_compute_context(&env, &withdrawal, &scope);
-        let proof_context = &proof.pub_signals[7];  // Signal index 7 = context
-        
-        if context != *proof_context {
+        if context != proof.pub_signals.get(7).unwrap() {
             return Err(PrivacyPoolError::ContextMismatch);
         }
         
-        // ── 3. Check tree depth bounds ──
-        let state_tree_depth = Self::_signal_to_u32(&proof.pub_signals[4]);
-        let asp_tree_depth = Self::_signal_to_u32(&proof.pub_signals[6]);
-        
+        // Check tree depth bounds
+        let state_tree_depth = Self::_bytes32_to_u32(&proof.pub_signals.get(4).unwrap());
+        let asp_tree_depth = Self::_bytes32_to_u32(&proof.pub_signals.get(6).unwrap());
         if state_tree_depth > MAX_TREE_DEPTH || asp_tree_depth > MAX_TREE_DEPTH {
             return Err(PrivacyPoolError::InvalidTreeDepth);
         }
         
-        // ── 4. Check state root is known ──
-        let state_root = &proof.pub_signals[3];
-        if !Self::_is_known_root(&env, state_root) {
+        // Check state root is known
+        if !Self::_is_known_root(&env, &proof.pub_signals.get(3).unwrap()) {
             return Err(PrivacyPoolError::UnknownStateRoot);
         }
         
-        // ── 5. Check ASP root is latest ──
-        let latest_asp_root = Self::_latest_root(&env);
-        let proof_asp_root = &proof.pub_signals[5];
-        if proof_asp_root != &latest_asp_root {
+        // Check ASP root matches latest
+        if proof.pub_signals.get(5).unwrap() != Self::_latest_asp_root_bytes(&env) {
             return Err(PrivacyPoolError::IncorrectASPRoot);
         }
         
-        // ── UPGRADE A: Check allowlist root ──
-        let stored_allowlist_root: BytesN<32> = env.storage()
-            .persistent()
+        // Check allowlist root
+        let stored_allowlist: BytesN<32> = env.storage()
+            .instance()
             .get(&DataKey::AllowlistRoot)
             .unwrap_or(BytesN::from_array(&env, &[0u8; 32]));
-        let proof_allowlist_root = &proof.pub_signals[8];
-        if proof_allowlist_root != &stored_allowlist_root {
+        if proof.pub_signals.get(8).unwrap() != stored_allowlist {
             return Err(PrivacyPoolError::AllowlistMismatch);
         }
         
-        // ── 6. Verify Groth16 proof via BN254 host functions ──
-        // Protocol 25/26: Uses env.crypto().bn254_*() for pairing check
-        if !Self::_verify_groth16(&env, &proof) {
+        // Full Groth16 verification with VK
+        if !Self::_verify_groth16_full(&env, &proof.proof, &proof.pub_signals) {
             return Err(PrivacyPoolError::InvalidProof);
         }
         
-        // ── 7. Mark nullifier as spent (double-spend prevention) ──
-        let nullifier_hash = &proof.pub_signals[1];
+        // Mark nullifier as spent
+        let nullifier_hash = proof.pub_signals.get(1).unwrap();
         if env.storage().persistent().has(&DataKey::NullifierSpent(nullifier_hash.clone())) {
             return Err(PrivacyPoolError::NullifierAlreadySpent);
         }
         env.storage().persistent().set(&DataKey::NullifierSpent(nullifier_hash.clone()), &true);
+        env.storage().persistent().extend_ttl(&DataKey::NullifierSpent(nullifier_hash.clone()), 100, 518400);
         
-        // ── 8. Insert new commitment into state ──
-        let new_commitment = &proof.pub_signals[0];
-        Self::_insert_into_state(&env, new_commitment);
+        // Store new commitment (root already proven via SNARK, relayer will set next root)
+        let new_commitment = proof.pub_signals.get(0).unwrap();
+        Self::_store_commitment(&env, &new_commitment);
         
-        // ── 9. Transfer USDC to processooor ──
-        let withdrawn_value = Self::_signal_to_i128(&proof.pub_signals[2]);
-        if withdrawn_value <= 0 {
+        // Transfer USDC
+        let withdrawn_value = Self::_bytes32_to_u128(&proof.pub_signals.get(2).unwrap());
+        if withdrawn_value == 0 {
             return Err(PrivacyPoolError::InvalidWithdrawalAmount);
         }
-        let asset: Address = env.storage().persistent().get(&DataKey::Asset).unwrap();
-        let token = TokenClient::new(&env, &asset);
-        token.transfer(&env.current_contract_address(), &withdrawal.processooor, &withdrawn_value);
+        let asset: Address = env.storage().instance().get(&DataKey::Asset).unwrap();
+        TokenClient::new(&env, &asset).transfer(
+            &env.current_contract_address(),
+            &withdrawal.processooor,
+            &(withdrawn_value as i128),
+        );
         
-        // ── UPGRADE B: Store ciphertext for auditor ──
-        let ciphertext = &proof.pub_signals[9];
+        // Store ciphertext for auditor
         env.storage().persistent().set(
             &DataKey::Ciphertext(nullifier_hash.clone()),
-            &ciphertext,
+            &proof.pub_signals.get(9).unwrap(),
         );
         
-        // ── Emit event ──
-        env.events().publish(
-            ("Withdrawn", withdrawal.processooor),
-            (withdrawn_value, nullifier_hash.clone(), new_commitment.clone()),
-        );
+        env.storage().instance().extend_ttl(100, 518400);
+        
+        env.events().publish(("Withdrawn", withdrawal.processooor), (withdrawn_value));
         
         Ok(())
     }
     
     // ══════════════════════════════════════════════════════════════
-    //  RELAY (via Entrypoint)
+    //  RAGEQUIT
     // ══════════════════════════════════════════════════════════════
     
-    /// Relayed withdrawal — processes withdrawal through the Entrypoint
-    /// with fee distribution to the relayer.
-    /// 
-    /// Replaces: Entrypoint.relay()
-    pub fn relay(
-        env: Env,
-        withdrawal: Withdrawal,
-        proof: WithdrawProof,
-    ) -> Result<(), PrivacyPoolError> {
-        // Verify withdrawn amount non-zero
-        let withdrawn_value = Self::_signal_to_i128(&proof.pub_signals[2]);
-        if withdrawn_value <= 0 {
-            return Err(PrivacyPoolError::InvalidWithdrawalAmount);
-        }
-        
-        // Set Entrypoint as processooor (relayer submits through Entrypoint)
-        let entrypoint = env.current_contract_address();
-        let relay_withdrawal = Withdrawal {
-            processooor: entrypoint.clone(),
-            data: withdrawal.data.clone(),
-        };
-        
-        // Get asset
-        let asset: Address = env.storage().persistent().get(&DataKey::Asset).unwrap();
-        let balance_before = TokenClient::new(&env, &asset).balance(&entrypoint);
-        
-        // Process withdrawal with Entrypoint as processooor
-        // We call the internal withdraw directly with modified withdrawal
-        env.storage().persistent().set(&DataKey::OverrideProcessooor, &entrypoint);
-        let result = Self::withdraw(env.clone(), relay_withdrawal, proof);
-        env.storage().persistent().remove(&DataKey::OverrideProcessooor);
-        
-        if result.is_err() {
-            return result;
-        }
-        
-        // Decode relay data
-        let _relay_data = Self::_decode_relay_data(&env, &withdrawal.data);
-        
-        // Get fee config
-        let config: AssetConfig = env.storage()
-            .persistent()
-            .get(&DataKey::AssetConfig(asset.to_xdr(&env)))
-            .unwrap();
-        
-        // Fee check
-        if withdrawal.data.as_array()[60..64]  // relayFeeBPS in last 4 bytes
-            .iter()
-            .fold(0u32, |acc, b| (acc << 8) | *b as u32) 
-            > config.max_relay_fee_bps {
-            return Err(PrivacyPoolError::RelayFeeGreaterThanMax);
-        }
-        
-        Ok(())
-    }
-    
-    // ══════════════════════════════════════════════════════════════
-    //  RAGEQUIT (Emergency Exit)
-    // ══════════════════════════════════════════════════════════════
-    
-    /// Emergency public withdrawal for original depositors.
-    /// Bypasses ASP allowlist check entirely — identical to Solidity ragequit.
     pub fn ragequit(
         env: Env,
-        proof: RagequitProof,
+        proof: FlatRagequitProof,
     ) -> Result<(), PrivacyPoolError> {
-        // ── Check caller is original depositor ──
-        let label = &proof.pub_signals[3];
+        if proof.pub_signals.len() != 4 {
+            return Err(PrivacyPoolError::InvalidPubSignalCount);
+        }
+        
+        let label = proof.pub_signals.get(3).unwrap();
         let depositor: Address = env.storage()
             .persistent()
             .get(&DataKey::Depositor(label.clone()))
             .ok_or(PrivacyPoolError::OnlyOriginalDepositor)?;
         depositor.require_auth();
         
-        // ── Verify Groth16 proof ──
-        if !Self::_verify_groth16_ragequit(&env, &proof) {
+        // Full Groth16 verification with VK
+        if !Self::_verify_groth16_full(&env, &proof.proof, &proof.pub_signals) {
             return Err(PrivacyPoolError::InvalidProof);
         }
         
-        // ── Check commitment exists in state ──
-        let commitment_hash = &proof.pub_signals[0];
-        // In production: full Merkle tree membership check
-        // For now: check if hash exists in our storage
-        if !env.storage().persistent().has(&DataKey::Depositor(label.clone())) {
-            return Err(PrivacyPoolError::InvalidCommitment);
-        }
-        
-        // ── Mark nullifier as spent ──
-        let nullifier_hash = &proof.pub_signals[1];
+        let nullifier_hash = proof.pub_signals.get(1).unwrap();
         if env.storage().persistent().has(&DataKey::NullifierSpent(nullifier_hash.clone())) {
             return Err(PrivacyPoolError::NullifierAlreadySpent);
         }
         env.storage().persistent().set(&DataKey::NullifierSpent(nullifier_hash.clone()), &true);
+        env.storage().persistent().extend_ttl(&DataKey::NullifierSpent(nullifier_hash), 100, 518400);
         
-        // ── Transfer full value to depositor ──
-        let value = Self::_signal_to_i128(&proof.pub_signals[2]);
-        let asset: Address = env.storage().persistent().get(&DataKey::Asset).unwrap();
-        let token = TokenClient::new(&env, &asset);
-        token.transfer(&env.current_contract_address(), &depositor, &value);
+        let value = Self::_bytes32_to_u128(&proof.pub_signals.get(2).unwrap());
+        let asset: Address = env.storage().instance().get(&DataKey::Asset).unwrap();
+        TokenClient::new(&env, &asset).transfer(&env.current_contract_address(), &depositor, &(value as i128));
         
-        // ── Emit event ──
-        env.events().publish(
-            ("Ragequit", depositor),
-            (commitment_hash.clone(), label.clone(), value),
-        );
+        env.storage().instance().extend_ttl(100, 518400);
+        env.events().publish(("Ragequit", depositor), (value));
         
         Ok(())
     }
@@ -529,54 +408,46 @@ impl PrivacyPool {
     //  ASP ROOT MANAGEMENT
     // ══════════════════════════════════════════════════════════════
     
-    /// Update ASP root (only callable by Postman).
-    /// Replaces: Entrypoint.updateRoot()
     pub fn update_root(
         env: Env,
         root: BytesN<32>,
         ipfs_cid: String,
     ) -> Result<u32, PrivacyPoolError> {
-        let postman: Address = env.storage().persistent().get(&DataKey::Postman).unwrap();
+        let postman: Address = env.storage().instance().get(&DataKey::Postman).unwrap();
         postman.require_auth();
         
         if root == BytesN::from_array(&env, &[0u8; 32]) {
             return Err(PrivacyPoolError::EmptyRoot);
         }
-        
         let cid_len = ipfs_cid.len() as u32;
         if cid_len < 32 || cid_len > 64 {
             return Err(PrivacyPoolError::InvalidIPFSCIDLength);
         }
         
-        // Append to association sets
         let mut sets: Vec<AssociationSetData> = env.storage()
             .persistent()
             .get(&DataKey::AssociationSets)
             .unwrap_or(Vec::new(&env));
         
-        sets.push_back(&AssociationSetData {
+        sets.push_back(AssociationSetData {
             root: root.clone(),
             ipfs_cid,
             timestamp: env.ledger().timestamp(),
         });
         
         env.storage().persistent().set(&DataKey::AssociationSets, &sets);
-        
+        env.storage().persistent().extend_ttl(&DataKey::AssociationSets, 100, 518400);
         let index = sets.len() as u32 - 1;
-        
         env.events().publish(("RootUpdated",), (root, env.ledger().timestamp()));
         
         Ok(index)
     }
     
-    /// UPGRADE A: Update allowlist root (only callable by Owner)
-    pub fn update_allowlist_root(
-        env: Env,
-        root: BytesN<32>,
-    ) -> Result<(), PrivacyPoolError> {
-        let owner: Address = env.storage().persistent().get(&DataKey::Owner).unwrap();
+    pub fn update_allowlist_root(env: Env, root: BytesN<32>) -> Result<(), PrivacyPoolError> {
+        let owner: Address = env.storage().instance().get(&DataKey::Owner).unwrap();
         owner.require_auth();
-        env.storage().persistent().set(&DataKey::AllowlistRoot, &root);
+        env.storage().instance().set(&DataKey::AllowlistRoot, &root);
+        env.storage().instance().extend_ttl(100, 518400);
         Ok(())
     }
     
@@ -585,15 +456,19 @@ impl PrivacyPool {
     // ══════════════════════════════════════════════════════════════
     
     pub fn latest_root(env: Env) -> BytesN<32> {
-        Self::_latest_root(&env)
+        let root_index: u32 = env.storage().instance().get(&DataKey::CurrentRootIndex).unwrap_or(0);
+        if root_index == 0 { return BytesN::from_array(&env, &[0u8; 32]); }
+        env.storage().persistent()
+            .get(&DataKey::RootHistory(root_index))
+            .unwrap_or(BytesN::from_array(&env, &[0u8; 32]))
     }
     
     pub fn current_tree_depth(env: Env) -> u32 {
-        env.storage().persistent().get(&DataKey::TreeDepth).unwrap_or(0)
+        env.storage().instance().get(&DataKey::TreeDepth).unwrap_or(0)
     }
     
     pub fn current_tree_size(env: Env) -> u64 {
-        env.storage().persistent().get(&DataKey::TreeSize).unwrap_or(0)
+        env.storage().instance().get(&DataKey::TreeSize).unwrap_or(0)
     }
     
     pub fn is_nullifier_spent(env: Env, nullifier_hash: BytesN<32>) -> bool {
@@ -601,175 +476,373 @@ impl PrivacyPool {
     }
     
     pub fn scope(env: Env) -> BytesN<32> {
-        env.storage().persistent().get(&DataKey::Scope).unwrap()
+        env.storage().instance().get(&DataKey::Scope).unwrap()
     }
     
     pub fn asset(env: Env) -> Address {
-        env.storage().persistent().get(&DataKey::Asset).unwrap()
+        env.storage().instance().get(&DataKey::Asset).unwrap()
     }
     
     // ══════════════════════════════════════════════════════════════
     //  INTERNAL: State Management
     // ══════════════════════════════════════════════════════════════
+    //
+    // CRITICAL: On-chain storage uses SHA256, but the ZK circuit uses Poseidon.
+    // We cannot compute Merkle roots on-chain because they won't match the circuit.
+    // Instead:
+    //   1. _store_commitment stores the leaf commitment (no root computation)
+    //   2. set_root is called by the off-chain relayer to register the Poseidon-based root
+    //   3. _is_known_root checks roots that were set via set_root
     
-    /// Insert a leaf into the state Merkle tree.
-    /// Uses Poseidon2 host function for hashing (Protocol 25).
-    /// Replaces: Solidity State._insert()
-    fn _insert_into_state(env: &Env, leaf: &BytesN<32>) {
-        let mut depth: u32 = env.storage().persistent().get(&DataKey::TreeDepth).unwrap_or(0);
-        let mut size: u64 = env.storage().persistent().get(&DataKey::TreeSize).unwrap_or(0);
+    fn _store_commitment(env: &Env, leaf: &BytesN<32>) {
+        let size: u64 = env.storage().instance().get(&DataKey::TreeSize).unwrap_or(0);
+        let depth: u32 = env.storage().instance().get(&DataKey::TreeDepth).unwrap_or(0);
         
-        // Simple Merkle tree simulation (production would use LeanIMT)
-        // For testnet/mvp: store the root directly
-        // The full LeanIMT implementation with Poseidon2 hashing is load-bearing
-        // for production but would exceed contract size limits in MVP
-        
-        let root = Self::_poseidon2_leaf(env, leaf);
-        
-        // Update root history (circular buffer, identical to Solidity)
-        let root_index: u32 = env.storage().persistent().get(&DataKey::CurrentRootIndex).unwrap_or(0);
-        let next_index = (root_index + 1) % ROOT_HISTORY_SIZE;
-        env.storage().persistent().set(&DataKey::RootHistory(next_index), &root);
-        env.storage().persistent().set(&DataKey::CurrentRootIndex, &next_index);
-        
-        // Update depth if needed
-        let new_depth = if size > 0 { (64 - (size + 1).leading_zeros()).max(1) } else { 1 };
-        if new_depth > depth {
-            depth = new_depth;
-            env.storage().persistent().set(&DataKey::TreeDepth, &depth);
+        // Update depth based on new size
+        if size > 0 {
+            let new_depth = (64 - (size + 1).leading_zeros()).max(1);
+            if new_depth > depth {
+                env.storage().instance().set(&DataKey::TreeDepth, &new_depth);
+            }
+        } else {
+            env.storage().instance().set(&DataKey::TreeDepth, &1u32);
         }
         
-        size += 1;
-        env.storage().persistent().set(&DataKey::TreeSize, &size);
+        env.storage().instance().set(&DataKey::TreeSize, &(size + 1));
+        env.storage().instance().extend_ttl(100, 518400);
         
-        env.events().publish(("LeafInserted",), (size, leaf.clone(), root));
+        // The Merkle root is NOT computed on-chain (SHA256 vs Poseidon mismatch).
+        // The off-chain relayer computes the correct Poseidon-based root
+        // and registers it via set_root().
+        env.events().publish(("LeafStored",), (size + 1, leaf.clone()));
     }
     
-    /// Poseidon2 hash of a single leaf value with zero peer.
-    /// Protocol 25: env.crypto().poseidon2() host function
-    fn _poseidon2_leaf(env: &Env, leaf: &BytesN<32>) -> BytesN<32> {
-        let mut inputs = Vec::new(env);
-        inputs.push_back(leaf.into_val(env));
-        let zero: BytesN<32> = BytesN::from_array(env, &[0u8; 32]);
-        inputs.push_back(zero.into_val(env));
-        env.crypto().poseidon2(&inputs)
+    /// Register a Poseidon-based Merkle root (called by off-chain relayer after computing it).
+    /// This is the root that the ZK circuit proves membership against.
+    pub fn set_root(env: Env, root: BytesN<32>) -> Result<(), PrivacyPoolError> {
+        // Only postman can set roots
+        let postman: Address = env.storage().instance().get(&DataKey::Postman).unwrap();
+        postman.require_auth();
+        
+        if root == BytesN::from_array(&env, &[0u8; 32]) {
+            return Err(PrivacyPoolError::EmptyRoot);
+        }
+        
+        // Store in root history circular buffer
+        let root_index: u32 = env.storage().instance().get(&DataKey::CurrentRootIndex).unwrap_or(0);
+        let next_index = (root_index + 1) % ROOT_HISTORY_SIZE;
+        env.storage().persistent().set(&DataKey::RootHistory(next_index), &root);
+        env.storage().persistent().extend_ttl(&DataKey::RootHistory(next_index), 100, 518400);
+        env.storage().instance().set(&DataKey::CurrentRootIndex, &next_index);
+        
+        env.storage().instance().extend_ttl(100, 518400);
+        env.events().publish(("RootSet",), (root,));
+        
+        Ok(())
     }
     
-    /// Check if a root exists in the history buffer.
-    /// Replaces: Solidity State._isKnownRoot()
     fn _is_known_root(env: &Env, root: &BytesN<32>) -> bool {
-        let root_index: u32 = env.storage().persistent().get(&DataKey::CurrentRootIndex).unwrap_or(0);
-        
+        let root_index: u32 = env.storage().instance().get(&DataKey::CurrentRootIndex).unwrap_or(0);
         for i in 0..ROOT_HISTORY_SIZE {
             let idx = (root_index + ROOT_HISTORY_SIZE - i) % ROOT_HISTORY_SIZE;
             if let Some(stored) = env.storage().persistent().get::<_, BytesN<32>>(&DataKey::RootHistory(idx)) {
-                if stored == *root {
-                    return true;
-                }
+                if &stored == root { return true; }
             }
         }
         false
     }
     
-    /// Get latest ASP root.
-    /// Replaces: Solidity Entrypoint.latestRoot()
-    fn _latest_root(env: &Env) -> BytesN<32> {
+    fn _latest_asp_root_bytes(env: &Env) -> BytesN<32> {
         let sets: Vec<AssociationSetData> = env.storage()
             .persistent()
             .get(&DataKey::AssociationSets)
             .unwrap_or(Vec::new(env));
-        
-        if sets.len() == 0 {
-            return BytesN::from_array(env, &[0u8; 32]);
-        }
-        
+        if sets.is_empty() { return BytesN::from_array(env, &[0u8; 32]); }
         sets.get(sets.len() - 1).unwrap().root
     }
     
-    /// Compute context: keccak256(withdrawal, scope) % SNARK_SCALAR_FIELD
-    /// Replaces: Solidity's abi.encode check in validWithdrawal modifier
     fn _compute_context(env: &Env, withdrawal: &Withdrawal, scope: &BytesN<32>) -> BytesN<32> {
-        let mut ctx_input = Vec::new(env);
-        ctx_input.push_back(withdrawal.processooor.to_xdr(env).as_slice());
-        ctx_input.push_back(withdrawal.data.as_slice());
-        ctx_input.push_back(scope.as_slice());
-        env.crypto().sha256(&BytesN::from_slice(env, &ctx_input))
+        let mut input = Bytes::new(env);
+        input.append(&withdrawal.processooor.clone().to_xdr(env));
+        input.append(&Bytes::from_array(env, &withdrawal.data.to_array()));
+        input.append(&Bytes::from_array(env, &scope.to_array()));
+        env.crypto().sha256(&input).into()
     }
     
     // ══════════════════════════════════════════════════════════════
-    //  INTERNAL: Groth16 Verification
+    //  VK STORAGE
     // ══════════════════════════════════════════════════════════════
     
-    /// Verify a Groth16 proof using BN254 pairing check.
-    /// Protocol 25: env.crypto().bn254_multi_pairing_check()
-    /// Protocol 26: env.crypto().bn254_msm() for MSM optimization
-    /// 
-    /// Replaces: Solidity WithdrawalVerifier.verifyProof()
-    fn _verify_groth16(env: &Env, proof: &WithdrawProof) -> bool {
-        // The verifier address stores the verification key
-        let verifier: Address = env.storage().persistent().get(&DataKey::WithdrawalVerifier).unwrap();
-        
-        // Deserialize proof into BN254 G1/G2 points
-        let pi_a = &proof.proof.pi_a;
-        let pi_b = &proof.proof.pi_b;
-        let pi_c = &proof.proof.pi_c;
-        
-        // Compute public signals commitment (linear combination of IC)
-        let pub_signals = &proof.pub_signals;
-        
-        // BN254 multi-pairing check:
-        // e(pi_a, pi_b) == e(pi_c, delta) * e(pub_signals_commitment, gamma)
-        // Uses Protocol 25 X-Ray's native bn254_multi_pairing_check host function
-        //
-        // Note: In production, this calls the verifier contract or uses
-        // env.crypto().bn254_* host functions directly.
-        // For MVP, we check via the verifier address (deployed Groth16 verifier)
-        
-        // Full BN254 verification requires:
-        // 1. env.crypto().bn254_multi_pairing_check() - Protocol 25
-        // 2. env.crypto().bn254_msm() - Protocol 26 (Yardstick) for MSM optimization
-        //
-        // For the hackathon MVP, this delegates to a pre-deployed verifier contract.
-        // The verifier contract uses native BN254 host functions.
-        
-        // Placeholder: In production, this would call:
-        // env.invoke_contract(&verifier, &"verify", ...)
-        
-        true  // MVP: assumes verifier contract is deployed and called
+    fn _store_vk(env: &Env, vk: &FlatVerificationKey) {
+        env.storage().instance().set(&DataKey::VkAlpha, &vk.alpha);
+        env.storage().instance().set(&DataKey::VkBeta, &vk.beta);
+        env.storage().instance().set(&DataKey::VkGamma, &vk.gamma);
+        env.storage().instance().set(&DataKey::VkDelta, &vk.delta);
+        env.storage().instance().set(&DataKey::VkIcLen, &(vk.ic.len() as u32));
+        for (i, ic_point) in vk.ic.iter().enumerate() {
+            env.storage().instance().set(&DataKey::VkIc(i as u32), &ic_point);
+        }
     }
     
-    fn _verify_groth16_ragequit(env: &Env, proof: &RagequitProof) -> bool {
-        let verifier: Address = env.storage().persistent().get(&DataKey::RagequitVerifier).unwrap();
+    fn _load_vk_ic(env: &Env, index: u32) -> Option<BytesN<96>> {
+        env.storage().instance().get(&DataKey::VkIc(index))
+    }
+    
+    // ══════════════════════════════════════════════════════════════
+    //  FULL Groth16 Verification (BLS12-381)
+    // ══════════════════════════════════════════════════════════════
+    //
+    //  Equation: e(-A, B) · e(α, β) · e(vk_x, γ) · e(C, δ) = 1
+    //  where vk_x = IC[0] + Σ(pub_signals[i] * IC[i+1])
+    //
+    //  This is the STANDARD Groth16 verification equation.
+    //  The VK is loaded from storage where it was set at deploy time.
+    
+    fn _verify_groth16_full(
+        env: &Env,
+        proof: &FlatGroth16Proof,
+        pub_signals: &Vec<BytesN<32>>,
+    ) -> bool {
+        // Load VK components
+        let vk_alpha: BytesN<96> = match env.storage().instance().get(&DataKey::VkAlpha) {
+            Some(v) => v,
+            None => return false,
+        };
+        let vk_beta: BytesN<192> = match env.storage().instance().get(&DataKey::VkBeta) {
+            Some(v) => v,
+            None => return false,
+        };
+        let vk_gamma: BytesN<192> = match env.storage().instance().get(&DataKey::VkGamma) {
+            Some(v) => v,
+            None => return false,
+        };
+        let vk_delta: BytesN<192> = match env.storage().instance().get(&DataKey::VkDelta) {
+            Some(v) => v,
+            None => return false,
+        };
+        let vk_ic_len: u32 = env.storage().instance().get(&DataKey::VkIcLen).unwrap_or(0);
         
-        // Same BN254 verification for ragequit proofs
-        // Replaces: Solidity CommitmentVerifier.verifyProof()
+        // Validate pub_signals count matches VK
+        // VK needs IC[0..n] where n = pub_signals.len()
+        if vk_ic_len != pub_signals.len() as u32 + 1 {
+            return false;
+        }
         
-        true  // MVP placeholder
+        // Load IC[0]
+        let ic0: BytesN<96> = match Self::_load_vk_ic(env, 0) {
+            Some(v) => v,
+            None => return false,
+        };
+        
+        // Reconstruct BLS12-381 types from flat byte arrays
+        let a = Bls12381G1Affine::from_bytes(proof.a.clone());
+        let b = Bls12381G2Affine::from_bytes(proof.b.clone());
+        let c = Bls12381G1Affine::from_bytes(proof.c.clone());
+        let alpha = Bls12381G1Affine::from_bytes(vk_alpha);
+        let beta = Bls12381G2Affine::from_bytes(vk_beta);
+        let gamma = Bls12381G2Affine::from_bytes(vk_gamma);
+        let delta = Bls12381G2Affine::from_bytes(vk_delta);
+        
+        let bls = env.crypto().bls12_381();
+        
+        // Compute vk_x = IC[0] + Σ(pub_signals[i] * IC[i+1])
+        let mut vk_x = Bls12381G1Affine::from_bytes(ic0);
+        
+        for i in 0..pub_signals.len() {
+            let ic_point = match Self::_load_vk_ic(env, i as u32 + 1) {
+                Some(v) => v,
+                None => return false,
+            };
+            let signal_bn = pub_signals.get(i).unwrap();
+            let fr = Bls12381Fr::from_bytes(signal_bn);
+            let ic_g1 = Bls12381G1Affine::from_bytes(ic_point);
+            let prod = bls.g1_mul(&ic_g1, &fr);
+            vk_x = bls.g1_add(&vk_x, &prod);
+        }
+        
+        // Full pairing check:
+        // e(-A, B) · e(α, β) · e(vk_x, γ) · e(C, δ) = 1
+        let neg_a = -a;
+        let vp1 = vec![env, neg_a, alpha, vk_x, c];
+        let vp2 = vec![env, b, beta, gamma, delta];
+        
+        bls.pairing_check(vp1, vp2)
     }
     
     // ══════════════════════════════════════════════════════════════
     //  HELPERS
     // ══════════════════════════════════════════════════════════════
     
-    fn _signal_to_i128(signal: &BytesN<32>) -> i128 {
-        let arr = signal.as_array();
-        i128::from_be_bytes(*arr)
+    fn _bytes32_to_u128(bytes: &BytesN<32>) -> u128 {
+        let arr = bytes.to_array();
+        let mut buf = [0u8; 16];
+        buf.copy_from_slice(&arr[16..32]);
+        u128::from_be_bytes(buf)
     }
     
-    fn _signal_to_u32(signal: &BytesN<32>) -> u32 {
-        let arr = signal.as_array();
-        u32::from_be_bytes(arr[28..32].try_into().unwrap())
+    fn _bytes32_to_u32(bytes: &BytesN<32>) -> u32 {
+        let arr = bytes.to_array();
+        let mut buf = [0u8; 4];
+        buf.copy_from_slice(&arr[28..32]);
+        u32::from_be_bytes(buf)
     }
+}
+
+// ════════════════════════════════════════════════════════════════
+//  TESTS
+// ════════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::{
+        testutils::Address as _,
+        token::StellarAssetClient,
+        vec, Address, BytesN, Env, String,
+    };
     
-    fn _decode_relay_data(env: &Env, data: &BytesN<64>) -> RelayData {
-        // First 32 bytes: recipient address
-        // Next 32 bytes: fee recipient address  
-        // Last 4 bytes: relay fee BPS
-        let arr = data.as_array();
-        RelayData {
-            recipient: Address::from_array(env, &arr[0..32]),
-            fee_recipient: Address::from_array(env, &arr[32..64]),
-            relay_fee_bps: 0,  // TODO: decode from XDR
+    fn make_empty_vk(env: &Env) -> FlatVerificationKey {
+        FlatVerificationKey {
+            alpha: BytesN::from_array(env, &[0u8; 96]),
+            beta: BytesN::from_array(env, &[0u8; 192]),
+            gamma: BytesN::from_array(env, &[0u8; 192]),
+            delta: BytesN::from_array(env, &[0u8; 192]),
+            ic: vec![env, BytesN::from_array(env, &[0u8; 96])],
         }
+    }
+    
+    fn setup_test_env() -> (Env, Address, Address) {
+        let env = Env::default();
+        env.mock_all_auths();
+        
+        // Register a Stellar Asset Contract
+        let admin = Address::generate(&env);
+        let asset = env.register_stellar_asset_contract(admin);
+        
+        let owner = Address::generate(&env);
+        let postman = Address::generate(&env);
+        let vk = make_empty_vk(&env);
+        
+        let contract_id = env.register(
+            PrivacyPool,
+            (asset.clone(), vk, owner, postman),
+        );
+        
+        (env, contract_id, asset)
+    }
+    
+    /// Helper to mint tokens to a user via StellarAssetClient
+    fn mint_tokens(env: &Env, asset: &Address, to: &Address, amount: i128) {
+        let sac = StellarAssetClient::new(env, asset);
+        sac.mint(to, &amount);
+    }
+    
+    #[test]
+    fn test_constructor() {
+        let (env, contract_id, _asset) = setup_test_env();
+        let client = PrivacyPoolClient::new(&env, &contract_id);
+        assert_eq!(client.current_tree_depth(), 0);
+        assert_eq!(client.current_tree_size(), 0);
+    }
+    
+    #[test]
+    fn test_deposit_basic() {
+        let (env, contract_id, asset) = setup_test_env();
+        let client = PrivacyPoolClient::new(&env, &contract_id);
+        let depositor = Address::generate(&env);
+        let precommitment = BytesN::from_array(&env, &[1u8; 32]);
+        
+        mint_tokens(&env, &asset, &depositor, 100_000_000);
+        client.deposit(&depositor, &100_000_000, &precommitment);
+        
+        assert_eq!(client.current_tree_size(), 1);
+        assert_eq!(client.current_tree_depth(), 1);
+    }
+    
+    #[test]
+    fn test_deposit_rejects_zero_value() {
+        let (env, contract_id, _asset) = setup_test_env();
+        let client = PrivacyPoolClient::new(&env, &contract_id);
+        let depositor = Address::generate(&env);
+        
+        // Use try_deposit to catch the expected panic
+        let result = client.try_deposit(&depositor, &0, &BytesN::from_array(&env, &[1u8; 32]));
+        assert!(result.is_err());
+    }
+    
+    #[test]
+    fn test_deposit_rejects_duplicate_precommitment() {
+        let (env, contract_id, asset) = setup_test_env();
+        let client = PrivacyPoolClient::new(&env, &contract_id);
+        let depositor = Address::generate(&env);
+        let precommitment = BytesN::from_array(&env, &[1u8; 32]);
+        
+        mint_tokens(&env, &asset, &depositor, 200_000_000);
+        
+        client.deposit(&depositor, &100_000_000, &precommitment);
+        
+        // Use try_deposit to catch the expected panic
+        let result = client.try_deposit(&depositor, &50_000_000, &precommitment);
+        assert!(result.is_err());
+    }
+    
+    #[test]
+    fn test_update_root() {
+        let (env, contract_id, _asset) = setup_test_env();
+        let client = PrivacyPoolClient::new(&env, &contract_id);
+        
+        let root = BytesN::from_array(&env, &[2u8; 32]);
+        let cid = String::from_str(&env, "QmTest1234567890123456789012345678901234567890");
+        let index = client.update_root(&root, &cid);
+        assert_eq!(index, 0);
+    }
+    
+    #[test]
+    fn test_is_nullifier_spent() {
+        let (env, contract_id, _asset) = setup_test_env();
+        let client = PrivacyPoolClient::new(&env, &contract_id);
+        let nullifier = BytesN::from_array(&env, &[4u8; 32]);
+        assert!(!client.is_nullifier_spent(&nullifier));
+    }
+    
+    #[test]
+    fn test_set_root_after_deposit() {
+        let (env, contract_id, asset) = setup_test_env();
+        let client = PrivacyPoolClient::new(&env, &contract_id);
+        let depositor = Address::generate(&env);
+        
+        mint_tokens(&env, &asset, &depositor, 100_000_000);
+        client.deposit(&depositor, &100_000_000, &BytesN::from_array(&env, &[5u8; 32]));
+        
+        // After deposit, the relayer computes the Poseidon root off-chain
+        // and registers it via set_root()
+        let computed_root = BytesN::from_array(&env, &[42u8; 32]);
+        client.set_root(&computed_root);
+        
+        assert_eq!(client.latest_root(), computed_root);
+        assert_eq!(client.current_tree_size(), 1);
+    }
+    
+    #[test]
+    fn test_withdraw_rejects_invalid_pub_signal_count() {
+        let (env, contract_id, _asset) = setup_test_env();
+        let client = PrivacyPoolClient::new(&env, &contract_id);
+        
+        let processooor = Address::generate(&env);
+        let withdrawal = Withdrawal {
+            processooor,
+            data: BytesN::from_array(&env, &[0u8; 64]),
+        };
+        let proof = FlatWithdrawProof {
+            proof: FlatGroth16Proof {
+                a: BytesN::from_array(&env, &[0u8; 96]),
+                b: BytesN::from_array(&env, &[0u8; 192]),
+                c: BytesN::from_array(&env, &[0u8; 96]),
+            },
+            pub_signals: Vec::new(&env),
+        };
+        
+        let result = client.try_withdraw(&withdrawal, &proof);
+        assert!(result.is_err());
     }
 }

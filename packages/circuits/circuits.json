@@ -4,8 +4,13 @@
     "template": "CommitmentHasher",
     "pubs": ["value", "label"]
   },
+  "withdraw": {
+    "file": "main/withdraw",
+    "template": "Withdraw",
+    "pubs": ["withdrawnValue", "stateRoot", "stateTreeDepth", "ASPRoot", "ASPTreeDepth", "context"]
+  },
   "merkleTree": {
-    "file": "merkleTree",
-    "template": "MerkleTreeChecker"
+    "file": "main/merkleTree",
+    "template": "LeanIMTInclusionProof"
   }
 }

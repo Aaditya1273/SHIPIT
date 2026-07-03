@@ -1,14 +1,21 @@
 // ZK-PAY: Privacy Pool on Stellar
 // 
 // Module entry point — replaces Solidity's contract layout.
-// Each module corresponds to a Solidity file:
-//   lib.rs          → file structure (new)
-//   PrivacyPool.rs  → PrivacyPool.sol + Entrypoint.sol + State.sol
-//   proof_lib.rs    → ProofLib.sol
-//   constants.rs    → Constants.sol
-//   verifiers/      → WithdrawalVerifier.sol + CommitmentVerifier.sol
+// Files are in `contracts/` subdirectory alongside Solidity sources.
+// #[path] attributes used to resolve module locations.
+//
+// REQUIRED: #![no_std] for WASM target (Soroban contracts)
 
+#![no_std]
+
+#[path = "contracts/lib/Constants.rs"]
 pub mod constants;
+
+#[path = "contracts/lib/ProofLib.rs"]
 pub mod proof_lib;
+
+#[path = "contracts/PrivacyPool.rs"]
 pub mod privacy_pool;
+
+#[path = "contracts/verifiers/mod.rs"]
 pub mod verifiers;

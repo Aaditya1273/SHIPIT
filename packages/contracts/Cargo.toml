@@ -1,10 +1,10 @@
 [package]
-name = "privacy-pool-core"
-version = "1.1.0"
-description = "ZK-PAY: Privacy Pool on Stellar — Compliant Private USDC Payments"
+name = "zk-pay-privacy-pool"
+version = "2.0.0"
+description = "ZK-PAY: Compliant Privacy Pool on Stellar — BLS12-381 Groth16 verification"
 edition = "2021"
 license = "Apache-2.0"
-authors = ["Wonderland (migrated to Stellar by ZK-Pay)"]
+authors = ["Wonderland (ported to Stellar by ZK-Pay)"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -13,10 +13,10 @@ crate-type = ["cdylib", "rlib"]
 testutils = ["soroban-sdk/testutils"]
 
 [dependencies]
-soroban-sdk = { version = "21.0.0", features = ["testutils"] }
+soroban-sdk = { version = "27.0.0-rc.1" }
 
-[dev_dependencies]
-soroban-sdk = { version = "21.0.0", features = ["testutils"] }
+[dev-dependencies]
+soroban-sdk = { version = "27.0.0-rc.1", features = ["testutils"] }
 
 [profile.release]
 opt-level = "z"
@@ -25,26 +25,25 @@ lto = true
 debug = 0
 codegen-units = 1
 panic = "abort"
+strip = "symbols"
+debug-assertions = false
 
 [profile.test]
 opt-level = 0
 overflow-checks = true
 
 ############################################################
-# ZK-PAY: MIGRATION NOTES
-# 
-# This Cargo.toml replaces:
-#   - foundry.toml (Solidity build config)
-#   - remappings.txt (import remappings)
-#   - solhint.json (Solidity lint config)
+# ZK-PAY: BUILD & DEPLOY
 #
-# Build with: cargo build --target wasm32-unknown-unknown --release
-# Test with:  cargo test
-# Deploy with: stellar contract deploy --wasm target/wasm32-unknown-unknown/release/privacy_pool_core.wasm
+# Build:  cargo build --target wasm32-unknown-unknown --release
+# Test:   cargo test
+# Deploy: stellar contract deploy --wasm <WASM> --source <KEY> --network testnet -- --asset <ADDR> --verifier <ADDR> --owner <ADDR> --postman <ADDR>
 #
-# Protocol 25/26 features are accessed via:
-#   env.crypto().poseidon2()    — Poseidon2 hash (ZK-friendly)
-#   env.crypto().bn254_*()     — BN254 curve operations
-#   env.crypto().sha256()      — SHA256 fallback
+# CRYPTO PRIMITIVES (Stellar Protocol 22+/CAP-0059):
+#   env.crypto().bls12_381()   — BLS12-381 curve ops (G1/G2 add, mul, MSM, pairing)
+#   env.crypto().sha256()      — SHA256 for scope/nonce hashing
 #   TokenClient                — USDC transfers via Stellar Asset Contract
+#
+# Note: BN254 (CAP-0074) and Poseidon2 (CAP-0075) are NOT yet implemented on Stellar.
+#       This contract uses BLS12-381 which IS available via CAP-0059.
 ############################################################

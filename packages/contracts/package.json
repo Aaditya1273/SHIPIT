@@ -22,11 +22,7 @@
     "optimize": "cargo build --target wasm32-unknown-unknown --release && stellar contract optimize --wasm target/wasm32-unknown-unknown/release/privacy_pool_core.wasm"
   },
   "dependencies": {
-    "@stellar/stellar-sdk": "^12.1.0",
-    "soroban-client": "^1.1.0"
+    "@stellar/stellar-sdk": "^12.1.0"
   },
-  "devDependencies": {
-    "soroban-cli": "21.0.0",
-    "stellar-cli": "27.0.0"
-  }
+  "devDependencies": {}
 }
