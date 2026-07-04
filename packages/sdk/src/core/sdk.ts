@@ -4,8 +4,10 @@ import { CircuitsInterface } from "../interfaces/circuits.interface.js";
 import { Commitment, CommitmentProof } from "../types/commitment.js";
 import { WithdrawalProof, WithdrawalProofInput } from "../types/withdrawal.js";
 import { ContractInteractionsService } from "./contracts.service.js";
+import { StellarContractInteractions } from "./stellar-contracts.service.js";
 import { Hex, Address, Chain } from "viem";
 import { AccountCommitment } from "../types/account.js";
+import type { StellarContractConfig } from "./stellar-contracts.service.js";
 
 /**
  * Main SDK class providing access to all privacy pool functionality.
@@ -32,6 +34,12 @@ export class PrivacyPoolSDK {
       entrypointAddress,
       privateKey,
     );
+  }
+
+  public createStellarContractInstance(
+    config: StellarContractConfig,
+  ): StellarContractInteractions {
+    return new StellarContractInteractions(config);
   }
 
   /**

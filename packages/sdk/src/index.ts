@@ -19,3 +19,11 @@ export { CommitmentService } from "./core/commitment.service.js";
 export { WithdrawalService } from "./core/withdrawal.service.js";
 export { AccountService } from "./core/account.service.js";
 export { DataService } from "./core/data.service.js";
+
+// Stellar services
+export {
+  StellarContractInteractions,
+  calculateContextStellar,
+} from "./core/stellar-contracts.service.js";
+export { StellarDataService } from "./core/stellar-data.service.js";
+export type { StellarContractConfig } from "./core/stellar-contracts.service.js";
