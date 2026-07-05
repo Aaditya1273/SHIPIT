@@ -1,18 +1,17 @@
 'use client';
 
-import { createContext, useCallback, useState } from 'react';
-import { Hex } from 'viem';
+import { createContext, useCallback, useState, type ReactNode } from 'react';
 import { Notification, NotificationType } from '~/types';
 
 type ContextType = {
   notifications: Notification[];
-  addNotification: (type: NotificationType, message: string, txHash?: Hex) => void;
+  addNotification: (type: NotificationType, message: string, txHash?: string) => void;
   removeNotification: (id: string) => void;
   getDefaultErrorMessage: (message?: string) => string;
 };
 
 interface StateProps {
-  children: React.ReactElement;
+  children: ReactNode;
 }
 
 export const NotificationContext = createContext({} as ContextType);
@@ -29,7 +28,7 @@ export const NotificationProvider = ({ children }: StateProps) => {
   }, []);
 
   const addNotification = useCallback(
-    (type: NotificationType, message: string, txHash?: Hex) => {
+    (type: NotificationType, message: string, txHash?: string) => {
       const id = Date.now().toString();
       setNotifications((prev) => [...prev, { id, type, message, txHash }]);
       setTimeout(() => removeNotification(id), 8000);

@@ -4,9 +4,9 @@
 // https://docs.sentry.io/platforms/javascript/guides/nextjs/
 
 import * as Sentry from '@sentry/nextjs';
-import { getConfig } from '~/config';
+import { getEnv } from '~/config/env';
 
-const SENTRY_DNS = getConfig().env.SENTRY_DSN;
+const SENTRY_DNS = getEnv().SENTRY_DSN;
 
 Sentry.init({
   dsn: SENTRY_DNS,

@@ -1,13 +1,13 @@
-import * as Sentry from '@sentry/nextjs';
-
 export async function register() {
-  if (process.env.NEXT_RUNTIME === 'nodejs') {
-    await import('../sentry.server.config');
-  }
-
-  if (process.env.NEXT_RUNTIME === 'edge') {
-    await import('../sentry.edge.config');
+  if (typeof globalThis !== 'undefined' && !('indexedDB' in globalThis)) {
+    (globalThis as any).indexedDB = {
+      open: () => ({
+        result: { objectStoreNames: { contains: () => false } },
+        onupgradeneeded: null,
+        onsuccess: null,
+        onerror: null,
+      }),
+      deleteDatabase: () => ({}),
+    };
   }
 }
-
-export const onRequestError = Sentry.captureRequestError;

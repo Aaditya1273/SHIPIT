@@ -1,6 +1,7 @@
 import { withSentryConfig } from '@sentry/nextjs';
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  outputFileTracingRoot: process.cwd(),
   // Skip ESLint during builds (run in pre-commit hooks instead)
   // ESLint is also part of pnpm run build
   eslint: {
@@ -24,10 +25,19 @@ const nextConfig = {
   // Server-side external packages (replaces webpack externals)
   serverExternalPackages: ['pino-pretty', 'encoding'],
   // Webpack fallback for development (when not using Turbopack)
-  webpack: (config, { isServer }) => {
+  webpack: (config, { isServer, nextRuntime }) => {
     config.resolve.fallback = {
       fs: false,
     };
+
+    // Fix for @emotion/react edge-light builds failing with React 19
+    if (config.resolve.conditionNames) {
+      config.resolve.conditionNames = config.resolve.conditionNames.filter(
+        (name) => !name.includes('edge')
+      );
+    }
+
+
 
     // Optimize cache for large strings (ABIs)
     config.cache = {

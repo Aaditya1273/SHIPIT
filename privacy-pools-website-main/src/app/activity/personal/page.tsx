@@ -1,14 +1,14 @@
 'use client';
 
-import { AdvancedViewContainer } from '~/components';
-import { ActivityFull } from '~/containers';
+import { Container, Typography } from '@mui/material';
 
-const PersonalActivityPage = () => {
+export default function PersonalActivityPage() {
   return (
-    <AdvancedViewContainer>
-      <ActivityFull />
-    </AdvancedViewContainer>
+    <Container maxWidth='lg' sx={{ py: 4 }}>
+      <Typography variant='h4' gutterBottom>Personal Activity</Typography>
+      <Typography variant='body1' color='text.secondary'>
+        Activity tracking coming soon for Stellar-based pools.
+      </Typography>
+    </Container>
   );
-};
-
-export default PersonalActivityPage;
+}

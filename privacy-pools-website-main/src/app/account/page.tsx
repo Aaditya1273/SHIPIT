@@ -1,7 +1,14 @@
-import { Welcome } from '~/containers';
+'use client';
 
-const Account = () => {
-  return <Welcome />;
-};
+import { Container, Typography } from '@mui/material';
 
-export default Account;
+export default function AccountPage() {
+  return (
+    <Container maxWidth='lg' sx={{ py: 4 }}>
+      <Typography variant='h4' gutterBottom>Account</Typography>
+      <Typography variant='body1' color='text.secondary'>
+        Account management coming soon for Stellar-based pools.
+      </Typography>
+    </Container>
+  );
+}

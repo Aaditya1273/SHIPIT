@@ -1,14 +1,14 @@
 'use client';
 
-import { AdvancedViewContainer } from '~/components';
-import { PoolAccountsFull } from '~/containers';
+import { Container, Typography } from '@mui/material';
 
-const PoolAccountsPage = () => {
+export default function PoolAccountsPage() {
   return (
-    <AdvancedViewContainer>
-      <PoolAccountsFull />
-    </AdvancedViewContainer>
+    <Container maxWidth='lg' sx={{ py: 4 }}>
+      <Typography variant='h4' gutterBottom>Pool Accounts</Typography>
+      <Typography variant='body1' color='text.secondary'>
+        Pool account management coming soon for Stellar-based pools.
+      </Typography>
+    </Container>
   );
-};
-
-export default PoolAccountsPage;
+}

@@ -3,9 +3,10 @@
 import { CssBaseline, GlobalStyles, ThemeProvider as MuiThemeProvider } from '@mui/material';
 import { getConfig } from '~/config';
 import { HEADER_HEIGHT } from '~/utils';
+import type { ReactNode } from 'react';
 
 interface StateProps {
-  children: React.ReactElement;
+  children: ReactNode;
 }
 
 export const defaultMode = 'light';
