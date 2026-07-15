@@ -8,6 +8,7 @@ node_modules/
 
 # OS files
 .DS_Store
+onchainos-skills
 Thumbs.db
 
 # IDE / Editor
