@@ -29,7 +29,7 @@ SHIPIT is the fastest way to create, configure, and deploy AI-powered Agent Serv
 
 | Feature | Description |
 |---------|-------------|
-| **🤖 AI-Powered Generation** | Gemini 2.5 Flash generates compliant brand names, descriptions, pricing, metadata, docs, and marketing |
+| **🤖 AI-Powered Generation** | Gemini 1.5 Flash + Groq Llama3 fallback generates brand names, descriptions, pricing, metadata, docs, and marketing |
 | **✅ Strict Zod Validation** | Pre-validates every field against OKX.AI rules before deployment |
 | **🎨 Auto Avatar Generation** | Downloads and uploads avatars — bypasses OKX's anti-URL rules |
 | **🛡️ Smart Fix™ Auto-Validation** | AI catches validation errors and auto-fixes descriptions during deployment |
@@ -39,7 +39,7 @@ SHIPIT is the fastest way to create, configure, and deploy AI-powered Agent Serv
 | **⚙️ ASP Configuration Generator** | Generates manifest.json, .env, skill.json, MCP configuration |
 | **📣 Marketing Kit** | Auto-generates X post, demo script, product pitch, launch announcement |
 | **📚 Auto Documentation** | Generates README, installation guide, usage examples, API docs, FAQ |
-| **🔌 Real OKX CLI Integration** | Orchestrates `pre-check` → `upload` → `create` → `activate` via `onchainos` CLI |
+| **🔌 Real OKX CLI Integration** | Orchestrates `upload` → `create` → `activate` via `onchainos` CLI (with proxy support) |
 | **💼 Business Model** | Free (3 deployments), Pro ($19/mo unlimited), Team ($49/mo workspace) |
 
 ---
@@ -56,8 +56,8 @@ State             Zustand (persisted to localStorage)
 Animations        Framer Motion
 Forms             React Hook Form + Zod validation
 Notifications     Sonner (toast system)
-AI Engine         Google Gemini 2.5 Flash
-CLI Integration   onchainos v4.2.4 (OKX Onchain OS)
+AI Engine         Gemini 1.5 Flash (primary) → Groq Llama3 (fallback)
+CLI Integration   onchainos (OKX Onchain OS) with proxy support
 ```
 
 ### Project Structure
