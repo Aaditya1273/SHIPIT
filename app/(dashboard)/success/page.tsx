@@ -4,13 +4,20 @@ import { useShipitStore } from "@/stores/shipit.store"
 import { useRouter } from "next/navigation"
 import { AppShowcaseCard } from "@/components/dashboard/AppShowcaseCard"
 import { Button } from "@/components/ui/button"
-import { PlusCircle, ExternalLink } from "lucide-react"
+import { PlusCircle } from "lucide-react"
 import confetti from "canvas-confetti"
 import { useEffect } from "react"
+import { ReadmeViewer } from "@/components/viewers/readme-viewer"
+import { XPostViewer } from "@/components/viewers/xpost-viewer"
+import { PayloadViewer } from "@/components/viewers/payload-viewer"
+import { DemoScriptViewer } from "@/components/viewers/demo-script-viewer"
+import { PitchViewer } from "@/components/viewers/pitch-viewer"
+import { FullDocsViewer } from "@/components/viewers/docs-viewer"
+import { ExportRepoButton } from "@/components/viewers/export-button"
 
 export default function SuccessPage() {
   const router = useRouter()
-  const { deployedAgents, resetPipeline } = useShipitStore()
+  const { deployedAgents, resetPipeline, generatedPayload } = useShipitStore()
   
   const latestAgent = deployedAgents[0]
 
@@ -24,7 +31,7 @@ export default function SuccessPage() {
     }
   }, [latestAgent])
 
-  if (!latestAgent) {
+  if (!latestAgent || !generatedPayload) {
     return (
       <div className="flex flex-col items-center justify-center h-64">
         <p>No recent deployments found.</p>
@@ -54,6 +61,29 @@ export default function SuccessPage() {
         <Button onClick={() => { resetPipeline(); router.push("/new") }}>
           <PlusCircle className="mr-2 h-4 w-4" /> Deploy Another
         </Button>
+      </div>
+
+      <div className="max-w-md mx-auto mt-4">
+        <ExportRepoButton payload={generatedPayload} />
+      </div>
+
+      <div className="mt-16 space-y-8">
+        <h3 className="text-2xl font-bold tracking-tight border-b pb-4">Deployment Assets</h3>
+        
+        <div className="grid md:grid-cols-2 gap-6 h-96">
+          <DemoScriptViewer agentId={latestAgent.id} />
+          <XPostViewer payload={generatedPayload} />
+        </div>
+        
+        <div className="grid md:grid-cols-2 gap-6 h-[500px]">
+          <ReadmeViewer payload={generatedPayload} />
+          <FullDocsViewer payload={generatedPayload} />
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-6 h-96">
+          <PitchViewer payload={generatedPayload} />
+          <PayloadViewer payload={generatedPayload} />
+        </div>
       </div>
     </div>
   )

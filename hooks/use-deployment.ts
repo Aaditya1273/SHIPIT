@@ -2,6 +2,7 @@ import { useState } from "react"
 import { useShipitStore, DEPLOY_STEPS } from "@/stores/shipit.store"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
+import { canDeploy } from "@/constants/pricing"
 
 export function useDeployment() {
   const [isDeploying, setIsDeploying] = useState(false)
@@ -11,12 +12,26 @@ export function useDeployment() {
     setDeploymentSteps, 
     updateDeploymentStep, 
     addDeployedAgent,
-    apiKey 
+    apiKey,
+    planTier,
+    deployedAgents 
   } = useShipitStore()
 
   const deploy = async () => {
     if (!generatedPayload) {
       toast.error("No payload found. Please generate an idea first.")
+      return
+    }
+
+    // Check tier deployment limit
+    const { allowed, reason } = canDeploy(planTier, deployedAgents.length)
+    if (!allowed) {
+      toast.error(reason || "Deployment limit reached", {
+        action: {
+          label: "Upgrade",
+          onClick: () => router.push("/settings")
+        }
+      })
       return
     }
 
@@ -27,7 +42,13 @@ export function useDeployment() {
       const res = await fetch("/api/deploy", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ payload: generatedPayload, apiKey })
+        body: JSON.stringify({ 
+          payload: generatedPayload, 
+          apiKey,
+          secretKey: typeof window !== "undefined" ? localStorage.getItem("OKX_SECRET_KEY") || "" : "",
+          passphrase: typeof window !== "undefined" ? localStorage.getItem("OKX_PASSPHRASE") || "" : "",
+          geminiApiKey: typeof window !== "undefined" ? localStorage.getItem("GEMINI_API_KEY") || "" : "",
+        })
       })
       
       if (!res.body) throw new Error("No response body")

@@ -1,5 +1,7 @@
+"use client"
+
 import { ArrowLeft } from "lucide-react";
-import { useNavigate, useRouter } from "@tanstack/react-router";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -19,18 +21,13 @@ export function BackButton({
   ...rest
 }: BackButtonProps) {
   const router = useRouter();
-  const navigate = useNavigate();
 
   const handleClick = () => {
     if (onClick) {
       onClick();
       return;
     }
-    if (router.history.length > 1) {
-      router.history.back();
-    } else {
-      navigate({ to: fallbackTo });
-    }
+    router.push(fallbackTo);
   };
 
   return (

@@ -26,8 +26,70 @@ export const DEFAULT_FEE = "0.05";
 export const MIN_FEE = "0.01";
 export const MAX_FEE = "10000";
 
-export const PRICING_TIERS = {
-  free: { label: "Free", maxDeployments: 3, price: 0 },
-  pro: { label: "Pro", maxDeployments: -1, price: 19 },
-  team: { label: "Team", maxDeployments: -1, price: 49 },
-} as const;
+export type PlanTier = "free" | "pro" | "team"
+
+export const PLAN_TIERS: Record<PlanTier, {
+  label: string
+  description: string
+  price: number
+  maxDeployments: number // -1 = unlimited
+  features: string[]
+  badge?: string
+  popular?: boolean
+}> = {
+  free: {
+    label: "Free",
+    description: "For developers getting started",
+    price: 0,
+    maxDeployments: 3,
+    features: [
+      "3 ASP deployments per month",
+      "All AI generation features",
+      "Dashboard & history",
+      "Community support",
+    ],
+  },
+  pro: {
+    label: "Pro",
+    description: "For serious ASP builders",
+    price: 19,
+    maxDeployments: -1,
+    badge: "Popular",
+    popular: true,
+    features: [
+      "Unlimited deployments",
+      "All AI generation features",
+      "Smart Fix™ auto-validation",
+      "Priority support",
+      "Custom API keys",
+      "Marketing kit download",
+    ],
+  },
+  team: {
+    label: "Team",
+    description: "For teams and agencies",
+    price: 49,
+    maxDeployments: -1,
+    features: [
+      "Everything in Pro",
+      "Shared workspace",
+      "Collaboration tools",
+      "Organization dashboard",
+      "Analytics & insights",
+      "Dedicated support",
+    ],
+  },
+} as const
+
+export function canDeploy(tier: PlanTier, currentCount: number): { allowed: boolean; reason?: string } {
+  const plan = PLAN_TIERS[tier]
+  if (!plan) return { allowed: false, reason: "Unknown plan tier" }
+  if (plan.maxDeployments === -1) return { allowed: true }
+  if (currentCount >= plan.maxDeployments) {
+    return {
+      allowed: false,
+      reason: `Free tier limited to ${plan.maxDeployments} deployments. Upgrade to Pro for unlimited deployments.`
+    }
+  }
+  return { allowed: true }
+}

@@ -60,7 +60,15 @@ export function useGeneration() {
                     name: data.name,
                     description: data.description,
                     fee: data.fee,
-                    avatarUrl: data.avatarUrl
+                    avatarUrl: data.avatarUrl,
+                    categories: data.categories || [],
+                    keywords: data.keywords || [],
+                    capabilities: data.capabilities || [],
+                    featuresList: data.featuresList || [],
+                    routingMetadata: data.routingMetadata || "",
+                    pricing: data.pricing || { subscriptionPlans: [], usageTiers: [], premiumUpgrades: [] },
+                    docs: data.docs || { installationGuide: "", usageExamples: "", apiDocumentation: "", faq: "" },
+                    marketing: data.marketing || { productPitch: "", launchAnnouncement: "" }
                   })
                   router.push("/review")
                 } else if (currentEvent === "error") {

@@ -8,6 +8,26 @@ export interface GeneratedPayload {
   description: string
   fee: string
   avatarUrl: string
+  categories: string[]
+  keywords: string[]
+  capabilities: string[]
+  featuresList: string[]
+  routingMetadata: string
+  pricing: {
+    subscriptionPlans: string[]
+    usageTiers: string[]
+    premiumUpgrades: string[]
+  }
+  docs: {
+    installationGuide: string
+    usageExamples: string
+    apiDocumentation: string
+    faq: string
+  }
+  marketing: {
+    productPitch: string
+    launchAnnouncement: string
+  }
 }
 
 interface ShipitState {
@@ -16,6 +36,9 @@ interface ShipitState {
   generatedPayload: GeneratedPayload | null
   deploymentSteps: DeploymentStep[]
   apiKey: string
+  
+  // Tier / subscription
+  planTier: "free" | "pro" | "team"
   
   // History
   deployedAgents: ASPData[]
@@ -26,8 +49,10 @@ interface ShipitState {
   setDeploymentSteps: (steps: DeploymentStep[] | ((prev: DeploymentStep[]) => DeploymentStep[])) => void
   updateDeploymentStep: (id: string, status: DeploymentStep["status"], label?: string, error?: string) => void
   setApiKey: (key: string) => void
+  setPlanTier: (tier: "free" | "pro" | "team") => void
   addDeployedAgent: (agent: ASPData) => void
   resetPipeline: () => void
+  clearDeploymentHistory: () => void
 }
 
 const INITIAL_STEPS: DeploymentStep[] = [
@@ -49,6 +74,7 @@ export const useShipitStore = create<ShipitState>()(
       generatedPayload: null,
       deploymentSteps: INITIAL_STEPS,
       apiKey: "",
+      planTier: "free",
       deployedAgents: [],
       
       setCurrentIdea: (idea) => set({ currentIdea: idea }),
@@ -67,6 +93,8 @@ export const useShipitStore = create<ShipitState>()(
       
       setApiKey: (key) => set({ apiKey: key }),
       
+      setPlanTier: (tier) => set({ planTier: tier }),
+      
       addDeployedAgent: (agent) => set((state) => ({
         deployedAgents: [agent, ...state.deployedAgents]
       })),
@@ -75,12 +103,15 @@ export const useShipitStore = create<ShipitState>()(
         currentIdea: "",
         generatedPayload: null,
         deploymentSteps: INITIAL_STEPS
-      })
+      }),
+      
+      clearDeploymentHistory: () => set({ deployedAgents: [] })
     }),
     {
       name: "shipit-storage",
       partialize: (state) => ({
         apiKey: state.apiKey,
+        planTier: state.planTier,
         deployedAgents: state.deployedAgents,
         generatedPayload: state.generatedPayload,
         deploymentSteps: state.deploymentSteps,

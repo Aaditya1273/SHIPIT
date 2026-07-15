@@ -3,6 +3,9 @@ import { generateBrandName } from "@/lib/generator/brand"
 import { generateDescription } from "@/lib/generator/description"
 import { generatePricing } from "@/lib/generator/pricing"
 import { generateAvatar } from "@/lib/generator/avatar"
+import { generateMetadata } from "@/lib/generator/metadata"
+import { generateDocs } from "@/lib/generator/docs"
+import { generateMarketing } from "@/lib/generator/marketing"
 import { validateName } from "@/lib/validator/name"
 import { validateDescription } from "@/lib/validator/description"
 import { validateFee } from "@/lib/validator/fee"
@@ -15,7 +18,7 @@ export async function POST(req: NextRequest) {
   }
   
   if (apiKey) {
-    process.env.OKX_API_KEY = apiKey
+    process.env.GEMINI_API_KEY = apiKey
   }
 
   const encoder = new TextEncoder()
@@ -42,12 +45,17 @@ export async function POST(req: NextRequest) {
       if (!descVal.success) throw new Error(`Description validation failed: ${descVal.error.errors[0].message}`)
       await sendEvent("step", { id: "2", label: "Description generated & validated", status: "success" })
 
-      // 3. Generate & Validate Pricing
-      await sendEvent("step", { id: "3", label: "Analyzing Pricing Model", status: "loading" })
-      const fee = await generatePricing(idea)
-      const feeVal = validateFee(fee)
+      // 3. Generate & Validate Pricing & Metadata
+      await sendEvent("step", { id: "3", label: "Analyzing Pricing & Metadata", status: "loading" })
+      const [pricingObj, metadataObj, docsObj, marketingObj] = await Promise.all([
+        generatePricing(idea),
+        generateMetadata(idea),
+        generateDocs(idea),
+        generateMarketing(idea)
+      ])
+      const feeVal = validateFee(pricingObj.fee)
       if (!feeVal.success) throw new Error(`Fee validation failed: ${feeVal.error.errors[0].message}`)
-      await sendEvent("step", { id: "3", label: `Fee: ${fee} USDT`, status: "success" })
+      await sendEvent("step", { id: "3", label: `Fee: ${pricingObj.fee} USDT`, status: "success" })
       
       // 4. Generate Avatar
       await sendEvent("step", { id: "4", label: "Generating Identity Avatar", status: "loading" })
@@ -55,7 +63,24 @@ export async function POST(req: NextRequest) {
       await sendEvent("step", { id: "4", label: "Avatar Generated", status: "success" })
 
       // Final signal for generation complete
-      await sendEvent("done", { name, description: desc, fee, avatarUrl: avatarPath })
+      await sendEvent("done", { 
+        name, 
+        description: desc, 
+        fee: pricingObj.fee, 
+        avatarUrl: avatarPath,
+        categories: metadataObj.categories,
+        keywords: metadataObj.keywords,
+        capabilities: metadataObj.capabilities,
+        featuresList: metadataObj.featuresList,
+        routingMetadata: metadataObj.routingMetadata,
+        pricing: {
+          subscriptionPlans: pricingObj.subscriptionPlans,
+          usageTiers: pricingObj.usageTiers,
+          premiumUpgrades: pricingObj.premiumUpgrades
+        },
+        docs: docsObj,
+        marketing: marketingObj
+      })
     } catch (error: any) {
       await sendEvent("error", { message: error.message || "Generation failed" })
     } finally {
