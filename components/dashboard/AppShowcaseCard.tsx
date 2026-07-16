@@ -10,6 +10,8 @@ export interface ASPData {
   fee: string
   avatarUrl?: string
   status: "deploying" | "ready" | "failed"
+  txHash?: string
+  explorerUrl?: string
 }
 
 interface AppShowcaseCardProps {
