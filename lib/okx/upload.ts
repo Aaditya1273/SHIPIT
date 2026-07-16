@@ -9,6 +9,7 @@ export async function runUpload(filePath: string, chain: string = "ethereum"): P
     }
     return stdout
   } catch (error: any) {
-    throw new Error(`Failed to upload avatar: ${error.message}`)
+    const details = error.stderr || error.stdout || ""
+    throw new Error(`Failed to upload avatar: ${error.message}\nDetails: ${details}`)
   }
 }

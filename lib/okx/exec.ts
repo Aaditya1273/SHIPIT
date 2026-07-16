@@ -2,6 +2,7 @@ import { exec } from "child_process"
 import { promisify } from "util"
 import path from "path"
 import os from "os"
+import fs from "fs"
 
 const execAsync = promisify(exec)
 
@@ -20,8 +21,24 @@ export async function execWithProxy(command: string): Promise<string> {
   // Vercel deployment support: use the bundled binary in the project's /bin directory
   const projectBin = path.join(process.cwd(), "bin")
   
+  // In Vercel serverless, /var/task is read-only and might lose the +x bit.
+  // We copy the binary to /tmp (which is writable) and chmod +x it.
+  const tmpBin = "/tmp"
+  if (process.env.VERCEL) {
+    const srcPath = path.join(projectBin, "onchainos")
+    const destPath = path.join(tmpBin, "onchainos")
+    if (!fs.existsSync(destPath) && fs.existsSync(srcPath)) {
+      try {
+        fs.copyFileSync(srcPath, destPath)
+        fs.chmodSync(destPath, "755")
+      } catch (err) {
+        console.warn("Failed to copy/chmod onchainos to /tmp:", err)
+      }
+    }
+  }
+  
   const currentPath = process.env.PATH || ""
-  const extendedPath = [projectBin, localBin, npmGlobalBin, npxCacheBin, currentPath]
+  const extendedPath = [tmpBin, projectBin, localBin, npmGlobalBin, npxCacheBin, currentPath]
     .filter(Boolean)
     .join(":")
 
