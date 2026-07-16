@@ -1,46 +1,44 @@
 # 🚀 SHIPIT
 
-**Zero-Touch Deployment for OKX.AI Agent Service Providers**
+**Zero-Touch Deployment Platform for OKX.AI Agent Service Providers (ASPs)**
 
-> Describe your idea. SHIPIT handles generation, validation, registration, and activation — all in one click.
+> Describe your idea in plain English. SHIPIT handles the AI generation, validation, on-chain registration, and marketplace activation — all in one click.
 
 ---
 
 ## ✨ Overview
 
-SHIPIT is the fastest way to create, configure, and deploy AI-powered Agent Service Providers (ASPs) for the [OKX.AI](https://www.okx.com/ai) ecosystem. Instead of spending hours learning SDKs, navigating strict validation rules, and manually running CLI commands, developers simply describe their idea in plain English.
+Becoming an **Agent Service Provider (ASP)** on [OKX.AI](https://www.okx.com/ai) is incredibly powerful, allowing you to monetize skills and APIs in the new Agent Economy. However, the manual onboarding process involves installing **Onchain OS**, navigating strict validation rules, logging into Agentic Wallets via CLI, and manually formatting A2MCP or A2A service payloads.
+
+**SHIPIT eliminates this friction entirely.**
+
+SHIPIT is the fastest way to create, configure, and deploy AI-powered ASPs to the OKX.AI ecosystem.
 
 **Input:**  
-*"Build an AI agent that writes SEO blogs for crypto startups."*
+*"Build an AI agent that writes SEO blogs for crypto startups. Charge 0.05 USDT per call."*
 
-**Output (auto-generated):**
-- Brand name & avatar
-- Marketplace description (2-part format)
-- Pricing model with subscription plans & usage tiers
-- Categories, keywords, and routing metadata
-- Configuration files (manifest, env, skill.json, MCP)
-- Documentation (README, install guide, API docs, FAQ)
-- Marketing kit (X post, demo script, product pitch)
-- Live deployment to OKX.AI
+**Output (auto-generated & deployed):**
+- 🎨 **Brand Identity:** Name & Deterministic Avatar (OKX CDN compatible)
+- 📝 **Marketplace Profile:** 2-part OKX description format
+- 💰 **Monetization:** Pay-per-call pricing mapped to A2MCP specs
+- 🏷️ **Discoverability:** Categories, keywords, and routing metadata
+- 🔌 **Endpoint Config:** Ready-to-use A2MCP endpoint structure
+- 🚀 **Live Deployment:** Instantly registered on-chain via Onchain OS
+- 📢 **Go-to-Market Kit:** X post, demo script, product pitch
 
 ---
 
-## 🎯 Features
+## 🎯 Hackathon Features & Integrations
 
-| Feature | Description |
-|---------|-------------|
-| **🤖 AI-Powered Generation** | Gemini 1.5 Flash + Groq Llama3 fallback generates brand names, descriptions, pricing, metadata, docs, and marketing |
-| **✅ Strict Zod Validation** | Pre-validates every field against OKX.AI rules before deployment |
-| **🎨 Auto Avatar Generation** | Downloads and uploads avatars — bypasses OKX's anti-URL rules |
-| **🛡️ Smart Fix™ Auto-Validation** | AI catches validation errors and auto-fixes descriptions during deployment |
-| **📊 Deployment Readiness Score** | Real-time SSE streaming shows each step of the pipeline |
-| **📄 Smart Marketplace Metadata** | Auto-generates categories, keywords, capabilities, routing metadata |
-| **💰 Revenue Generator** | Suggests pay-per-call pricing, subscription plans, usage tiers, premium upgrades |
-| **⚙️ ASP Configuration Generator** | Generates manifest.json, .env, skill.json, MCP configuration |
-| **📣 Marketing Kit** | Auto-generates X post, demo script, product pitch, launch announcement |
-| **📚 Auto Documentation** | Generates README, installation guide, usage examples, API docs, FAQ |
-| **🔌 Real OKX CLI Integration** | Orchestrates `upload` → `create` → `activate` via `onchainos` CLI (with proxy support) |
-| **💼 Business Model** | Free (3 deployments), Pro ($19/mo unlimited), Team ($49/mo workspace) |
+| Feature | OKX.AI Integration | Description |
+|---------|-------------------|-------------|
+| **🤖 AI-Powered Payload Generation** | Meets OKX.AI Schema | Gemini 1.5 Flash generates names, descriptions, and A2MCP service metadata formatted exactly to OKX specs. |
+| **🎨 Zero-Disk Avatar Upload** | OKX CDN (`static.okx.com`) | Generates a deterministic DiceBear avatar, downloads it in-memory, and uses the `onchainos agent upload` CLI to meet OKX's strict `--picture` URL rules. |
+| **🔌 A2MCP Automation** | Agent-to-MCP Services | Automatically configures the ASP as an **A2MCP** service with fixed pay-per-call pricing and compliant endpoint structures. |
+| **🛡️ Smart Fix™ Auto-Validation** | OKX Validation Rules | Intercepts `onchainos` CLI validation errors (e.g., name too long, description format) and auto-repairs them via AI before retrying. |
+| **🚀 Onchain OS Orchestration** | `onchainos` CLI | Wraps the official Rust binary. Executes `upload` → `create` → `activate` seamlessly in the background. |
+| **☁️ Serverless CLI Execution** | Vercel Serverless Ready | Custom Node.js wrappers copy the `onchainos` binary to `/tmp`, set `ONCHAINOS_HOME`, and execute via proxy — making Rust CLI deployments work flawlessly on Vercel. |
+| **📊 Real-time Deployment Stream** | Server-Sent Events (SSE) | Beautiful UI tracking every step of the OKX registration process live. |
 
 ---
 
@@ -183,14 +181,14 @@ RootLayout
 
 ### Prerequisites
 
-- **Node.js** 18+ (required for Next.js 15)
-- **OKX Onchain OS CLI** (for real deployments)
+- **Node.js** 18+
+- **OKX.AI Developer Account** (For API Keys)
 
-### Installation
+### Installation & Local Dev
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/your-org/shipit.git
+git clone https://github.com/Aaditya1273/ZK-Pay.git shipit
 cd shipit
 
 # 2. Install dependencies
@@ -198,28 +196,26 @@ npm install
 
 # 3. Set up environment
 cp .env.example .env.local
-# Edit .env.local with all required keys (see Environment Variables table below)
+# Add GEMINI_API_KEY, OKX_API_KEY, OKX_SECRET_KEY, OKX_PASSPHRASE
 
 # 4. Start the dev server
 npm run dev
 # Open http://localhost:3000
-
-# 5. Install OKX CLI (for real deployments)
-curl -sSL https://raw.githubusercontent.com/okx/onchainos-skills/main/install.sh | sh
-# Add to your PATH: export PATH="$HOME/.local/bin:$PATH"
 ```
+
+> **Note on OKX CLI:** SHIPIT bundles the `onchainos` binary in the `bin/` directory and manages its execution automatically. You do not need to install `onchainos-skills` globally to run this app.
 
 ### Quick Start
 
-1. Open http://localhost:3000
-2. Click **"Start Deploying"** → goes to `/new`
-3. Enter an idea: *"Build an AI agent that writes SEO blogs for crypto startups"*
-4. Press **Enter** → watch the 4-step generation pipeline stream
-5. **Review** the generated brand name, description, pricing, avatar
-6. Click **"Looks Good, Deploy Now"** → real OKX CLI deployment
-7. **Success!** Share your X post, demo script, and README
+1. Open `http://localhost:3000` (or your Vercel deployment URL).
+2. Click **"Start Deploying"** to enter the dashboard.
+3. Describe your ASP: *"A data oracle agent that provides real-time token sentiment analysis for 0.1 USDT per call."*
+4. Watch the AI instantly generate your OKX-compliant A2MCP payload.
+5. Review the details, then click **"Deploy Now"**.
+6. SHIPIT executes the `onchainos` registration on-chain.
+7. Success! Your agent is now in the "Pending OKX Review" queue, and you receive an instant Terminal Verification command to prove its on-chain existence.
 
-### Scripts
+---
 
 | Command | Description |
 |---------|-------------|
