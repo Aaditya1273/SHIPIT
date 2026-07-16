@@ -44,9 +44,13 @@ async function downloadToTmp(url: string): Promise<string> {
 }
 
 async function uploadViaCliWithRetry(filePath: string, chain: string): Promise<string> {
-  // Verify file exists before calling CLI to surface a clearer error
+  // If the file doesn't exist (e.g. stale localStorage payload from old /tmp path),
+  // generate a fresh deterministic avatar instead of failing
   if (!fs.existsSync(filePath)) {
-    throw new Error(`Avatar file not found at ${filePath}. Check that /tmp is writable.`)
+    const seed = path.basename(filePath).replace(/[^a-zA-Z0-9]/g, "").slice(0, 32) || "agent"
+    const freshUrl = `https://api.dicebear.com/7.x/shapes/png?seed=${seed}&size=400`
+    console.warn(`[upload] File not found at ${filePath}, generating fresh avatar from DiceBear`)
+    filePath = await downloadToTmp(freshUrl)
   }
 
   const stdout = await execWithProxy(
