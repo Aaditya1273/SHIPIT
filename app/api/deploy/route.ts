@@ -114,17 +114,30 @@ export async function POST(req: NextRequest) {
           const createResult = await runCreate(name, currentDesc, finalAvatarUrl, services, chain)
           txHash = createResult.txHash || ""
           
-          // OKX returns newAgentId=null — fetch the real numeric ID immediately
-          // by listing our agents and picking the most recently created one
-          try {
-            const getResult = await execWithProxy(`onchainos agent get --chain "${chain}"`)
-            const parsed = JSON.parse(getResult)
-            const agentList = parsed?.data?.list?.[0]?.agentList || []
-            if (agentList.length > 0) {
-              // Most recent agent is first in the list
-              agentId = String(agentList[0].agentId)
+          // OKX returns newAgentId=null and takes a few seconds to index the new agent.
+          // We poll a few times to find the real numeric ID by matching the agent's name.
+          let foundRealId = false
+          for (let poll = 0; poll < 3; poll++) {
+            try {
+              await new Promise(r => setTimeout(r, 2000)) // Wait 2s for OKX indexing
+              const getResult = await execWithProxy(`onchainos agent get --chain "${chain}"`)
+              const parsed = JSON.parse(getResult)
+              const agentList = parsed?.data?.list?.[0]?.agentList || []
+              
+              // Find the agent we just created by name
+              const newlyCreated = agentList.find((a: any) => a.name === name)
+              if (newlyCreated?.agentId) {
+                agentId = String(newlyCreated.agentId)
+                foundRealId = true
+                break
+              }
+            } catch (err: any) {
+              console.warn(`[deploy] Failed to fetch agent ID on poll ${poll}:`, err.message)
             }
-          } catch {
+          }
+          
+          // Fallback if OKX indexing is very slow or API errors out
+          if (!foundRealId) {
             agentId = createResult.agentId || txHash
           }
           
