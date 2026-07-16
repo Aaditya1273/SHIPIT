@@ -4,6 +4,7 @@ import { generateWithFallback } from "@/lib/generator/ai"
 import { runUpload } from "@/lib/okx/upload"
 import { runCreate } from "@/lib/okx/create"
 import { runActivate } from "@/lib/okx/activate"
+import { execWithProxy } from "@/lib/okx/exec"
 import { checkRateLimit } from "@/lib/rate-limit"
 import { prisma } from "@/lib/prisma"
 import { PLAN_TIERS, type PlanTier } from "@/constants/pricing"
@@ -73,9 +74,13 @@ export async function POST(req: NextRequest) {
   const encoder = new TextEncoder()
   const stream = new TransformStream()
   const writer = stream.writable.getWriter()
+  let writerClosed = false
   
   const sendEvent = async (event: string, data: any) => {
-    await writer.write(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
+    if (writerClosed) return
+    try {
+      await writer.write(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
+    } catch { /* client disconnected */ }
   }
 
   const executeDeployment = async () => {
@@ -107,8 +112,22 @@ export async function POST(req: NextRequest) {
             status: "loading" 
           })
           const createResult = await runCreate(name, currentDesc, finalAvatarUrl, services, chain)
-          agentId = createResult.agentId || createResult.txHash || ""
           txHash = createResult.txHash || ""
+          
+          // OKX returns newAgentId=null — fetch the real numeric ID immediately
+          // by listing our agents and picking the most recently created one
+          try {
+            const getResult = await execWithProxy(`onchainos agent get --chain "${chain}"`)
+            const parsed = JSON.parse(getResult)
+            const agentList = parsed?.data?.list?.[0]?.agentList || []
+            if (agentList.length > 0) {
+              // Most recent agent is first in the list
+              agentId = String(agentList[0].agentId)
+            }
+          } catch {
+            agentId = createResult.agentId || txHash
+          }
+          
           break // Success
         } catch (e: any) {
           createAttempts++
@@ -161,14 +180,21 @@ export async function POST(req: NextRequest) {
         },
       })
 
-      const explorerUrl = txHash ? `https://www.okx.com/web3/explorer/eth/tx/${txHash}` : null
+      // Build proof URL — okx.ai/agents is the public OKX Onchain OS marketplace
+      // Judges can search by agent name to verify registration
+      const explorerUrl = agentId 
+        ? `https://okx.ai/agents?search=${encodeURIComponent(name)}`
+        : null
       await sendEvent("step", { id: "6", label: `Activated on-chain ✓`, status: "success" })
 
       await sendEvent("done", { agentId, txHash, explorerUrl, name, description: currentDesc, fee, avatarUrl: finalAvatarUrl })
     } catch (error: any) {
       await sendEvent("error", { message: error.message || "Deployment failed" })
     } finally {
-      await writer.close()
+      if (!writerClosed) {
+        writerClosed = true
+        await writer.close().catch(() => {})
+      }
     }
   }
 

@@ -21,7 +21,7 @@ export async function runCreate(
       throw new Error(parsed.error || "Agent creation failed")
     }
     return {
-      agentId: parsed?.data?.newAgentId ?? null,
+      agentId: parsed?.data?.newAgentId ? String(parsed.data.newAgentId) : null,
       txHash: parsed?.data?.txHash ?? null,
     }
   } catch (error: any) {

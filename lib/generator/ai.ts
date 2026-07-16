@@ -31,10 +31,10 @@ export async function generateWithFallback(prompt: string): Promise<string> {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "qwen/qwen3-32b",
+          model: "llama-3.3-70b-versatile",
           messages: [{ role: "user", content: prompt }],
           temperature: 0.7,
-          max_tokens: 4096,
+          max_tokens: 2048,
         }),
       });
 
@@ -44,10 +44,7 @@ export async function generateWithFallback(prompt: string): Promise<string> {
       }
 
       const data = await response.json();
-      let content = data.choices[0].message.content;
-      // Strip Qwen3 native chain-of-thought blocks
-      content = content.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
-      return content;
+      return data.choices[0].message.content;
     } catch (err) {
       console.warn("Groq failed, trying NVIDIA...", (err as Error).message?.slice(0, 80));
     }

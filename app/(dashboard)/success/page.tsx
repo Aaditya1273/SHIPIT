@@ -4,7 +4,7 @@ import { useShipitStore } from "@/stores/shipit.store"
 import { useRouter } from "next/navigation"
 import { AppShowcaseCard } from "@/components/dashboard/AppShowcaseCard"
 import { Button } from "@/components/ui/button"
-import { PlusCircle, CheckCircle2, Sparkles, ExternalLink } from "lucide-react"
+import { PlusCircle, CheckCircle2, Sparkles, ExternalLink, MessageCircle } from "lucide-react"
 import confetti from "canvas-confetti"
 import { useEffect } from "react"
 import { ReadmeViewer } from "@/components/viewers/readme-viewer"
@@ -74,24 +74,59 @@ export default function SuccessPage() {
       </motion.div>
 
       {/* Agent card + on-chain proof */}
-      <motion.div variants={item} className="max-w-sm mx-auto space-y-4">
+      <motion.div variants={item} className="max-w-sm mx-auto space-y-3">
         <AppShowcaseCard asp={latestAgent} />
-        {latestAgent.explorerUrl && (
-          <a
-            href={latestAgent.explorerUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center justify-center gap-2 w-full rounded-xl border border-[#7C5CFC]/30 bg-[#7C5CFC]/5 hover:bg-[#7C5CFC]/10 px-4 py-3 text-sm font-medium text-[#7C5CFC] transition-all"
-          >
-            <ExternalLink className="w-4 h-4" />
-            View On-Chain Proof on OKX Explorer
-          </a>
-        )}
-        {latestAgent.txHash && (
-          <p className="text-center text-[11px] text-gray-400 font-mono break-all">
-            tx: {latestAgent.txHash}
+
+        {/* On-chain proof block */}
+        <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Registration Proof</span>
+            <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-amber-600 bg-amber-50 border border-amber-200 rounded-full px-2.5 py-0.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+              Pending OKX Review
+            </span>
+          </div>
+
+          {latestAgent.id && (
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-gray-400">Agent ID</span>
+              <span className="font-mono font-semibold text-gray-700">#{latestAgent.id}</span>
+            </div>
+          )}
+
+          {latestAgent.txHash && (
+            <div className="space-y-1">
+              <span className="text-xs text-gray-400">Registration Tx</span>
+              <a
+                href={`https://web3.okx.com/explorer/x-layer-testnet/tx/${latestAgent.txHash}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1.5 text-[11px] font-mono text-[#7C5CFC] hover:underline break-all"
+              >
+                {latestAgent.txHash.slice(0, 20)}...{latestAgent.txHash.slice(-8)}
+                <ExternalLink className="w-3 h-3 shrink-0" />
+              </a>
+            </div>
+          )}
+
+          <p className="text-[11px] text-gray-400 leading-relaxed">
+            Your agent is registered on OKX Onchain OS. The public marketplace listing goes live after OKX completes their review (usually 24–48h).
           </p>
-        )}
+        </div>
+      </motion.div>
+
+      {/* Chat on ChatGPT */}
+      <motion.div variants={item} className="max-w-sm mx-auto w-full">
+        <a
+          href={`https://chatgpt.com/?q=${encodeURIComponent(`You are ${latestAgent.name}, an AI agent registered on OKX Onchain OS. Here is your profile:\n\nDescription: ${latestAgent.description}\nFee: ${latestAgent.fee} USDT per request\nAgent ID: #${latestAgent.id}\n\nA user wants to interact with you. Introduce yourself and offer your services.`)}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center justify-center gap-2.5 w-full rounded-xl bg-[#10a37f] hover:bg-[#0d9070] text-white px-6 py-3 text-sm font-semibold transition-all shadow-sm"
+        >
+          <MessageCircle className="w-4 h-4" />
+          Try Agent on ChatGPT — Free
+        </a>
+        <p className="text-center text-[11px] text-gray-400 mt-2">Opens ChatGPT with your agent&apos;s context pre-loaded. No API key needed.</p>
       </motion.div>
 
       {/* Actions */}

@@ -38,9 +38,13 @@ export async function POST(req: NextRequest) {
   const encoder = new TextEncoder()
   const stream = new TransformStream()
   const writer = stream.writable.getWriter()
+  let writerClosed = false
   
   const sendEvent = async (event: string, data: any) => {
-    await writer.write(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
+    if (writerClosed) return
+    try {
+      await writer.write(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
+    } catch { /* stream may have been closed by client disconnect */ }
   }
 
   const executeGeneration = async () => {
@@ -98,7 +102,10 @@ export async function POST(req: NextRequest) {
     } catch (error: any) {
       await sendEvent("error", { message: error.message || "Generation failed" })
     } finally {
-      await writer.close()
+      if (!writerClosed) {
+        writerClosed = true
+        await writer.close().catch(() => {})
+      }
     }
   }
 
