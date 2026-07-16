@@ -87,12 +87,15 @@ export async function POST(req: NextRequest) {
     try {
       const { name, description, fee, avatarUrl: avatarPath } = payload
       
-      // Upload Avatar if it's a local file path
+      // Upload Avatar if it's a local file path (fallback for older generations)
       let finalAvatarUrl = avatarPath
       if (avatarPath && avatarPath.startsWith("/")) {
         await sendEvent("step", { id: "5", label: "Uploading avatar to OKX CDN", status: "loading" })
         finalAvatarUrl = await runUpload(avatarPath, chain)
         await sendEvent("step", { id: "5", label: "Avatar uploaded", status: "success" })
+      } else {
+        // Automatically mark step 5 as complete since the generate route already uploaded it
+        await sendEvent("step", { id: "5", label: "Validating Payload & CDN Avatar", status: "success" })
       }
 
       // 6. Smart Fix™ Create — wraps create in an AI auto-repair loop

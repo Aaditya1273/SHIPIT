@@ -10,6 +10,7 @@ import { validateName } from "@/lib/validator/name"
 import { validateDescription } from "@/lib/validator/description"
 import { validateFee } from "@/lib/validator/fee"
 import { checkRateLimit } from "@/lib/rate-limit"
+import { runUpload } from "@/lib/okx/upload"
 
 export async function POST(req: NextRequest) {
   const { idea, apiKey } = await req.json()
@@ -77,8 +78,11 @@ export async function POST(req: NextRequest) {
       
       // 4. Generate Avatar
       await sendEvent("step", { id: "4", label: "Generating Identity Avatar", status: "loading" })
-      const avatarPath = await generateAvatar(name)
-      await sendEvent("step", { id: "4", label: "Avatar Generated", status: "success" })
+      let avatarPath = await generateAvatar(name)
+      if (avatarPath && avatarPath.startsWith("/")) {
+         avatarPath = await runUpload(avatarPath, "ethereum")
+      }
+      await sendEvent("step", { id: "4", label: "Avatar Generated & Uploaded", status: "success" })
 
       // Final signal for generation complete
       await sendEvent("done", { 
